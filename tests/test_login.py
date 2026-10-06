@@ -16,7 +16,7 @@ class LoginTests(unittest.TestCase):
     def setUp(self):
         test_signup.SignupTests.setUp(self)
         self.client.post("/api/auth/signup", json=self.payload)
-        self.login_payload = {key: self.payload[key] for key in ("user_id", "password")}
+        self.login_payload = {key: self.payload[key] for key in ("email", "password")}
 
     def tearDown(self):
         test_signup.SignupTests.tearDown(self)
@@ -37,10 +37,10 @@ class LoginTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 401)
 
     def test_invalid_credentials_create_no_session(self):
-        for changes in ({"user_id": "missing"}, {"password": "wrong-password"}):
+        for changes in ({"email": "missing@example.com"}, {"password": "wrong-password"}):
             response = self.client.post("/api/auth/login", json={**self.login_payload, **changes})
             self.assertEqual(response.status_code, 401)
-            self.assertEqual(response.json()["detail"], "아이디 또는 비밀번호가 올바르지 않습니다.")
+            self.assertEqual(response.json()["detail"], "이메일 또는 비밀번호가 올바르지 않습니다.")
         with Session(self.engine) as db:
             self.assertEqual(db.scalar(select(func.count()).select_from(AuthSession)), 0)
 
@@ -61,5 +61,8 @@ class LoginTests(unittest.TestCase):
     def test_missing_invalid_token_and_invalid_input(self):
         for headers in ({}, {"Authorization": "Bearer invalid"}, {"Authorization": "Basic invalid"}):
             self.assertEqual(self.client.get("/api/auth/me", headers=headers).status_code, 401)
-        for changes in ({"user_id": " "}, {"password": ""}, {"password": "x" * 129}):
+        for changes in ({"email": " "}, {"email": "invalid"}, {"password": ""}, {"password": "x" * 129}):
             self.assertEqual(self.client.post("/api/auth/login", json={**self.login_payload, **changes}).status_code, 422)
+        self.assertEqual(self.client.post("/api/auth/login", json={
+            "user_id": self.payload["user_id"], "password": self.payload["password"],
+        }).status_code, 422)

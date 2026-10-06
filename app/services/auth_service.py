@@ -20,7 +20,7 @@ DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 
 
 class InvalidCredentialsError(Exception):
-    """아이디, 비밀번호 또는 계정 상태가 유효하지 않습니다."""
+    """이메일, 비밀번호 또는 계정 상태가 유효하지 않습니다."""
 
 
 def utc_now() -> datetime:
@@ -33,7 +33,7 @@ def hash_token(token: str) -> str:
 
 
 def login(db: Session, request: LoginRequest) -> LoginResponse:
-    user = db.scalar(select(User).where(User.user_id == request.user_id))
+    user = db.scalar(select(User).where(User.email == str(request.email)))
     try:
         valid = password_hasher.verify(
             request.password.get_secret_value(),
@@ -42,7 +42,7 @@ def login(db: Session, request: LoginRequest) -> LoginResponse:
     except UnknownHashError:
         valid = False
     if not user or not user.password_hash or not valid or user.account_status != "active":
-        raise InvalidCredentialsError("아이디 또는 비밀번호가 올바르지 않습니다.")
+        raise InvalidCredentialsError("이메일 또는 비밀번호가 올바르지 않습니다.")
 
     token = secrets.token_urlsafe(32)
     now = utc_now()

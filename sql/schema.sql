@@ -30,4 +30,17 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
         ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- 이메일 인증번호와 일회성 비밀번호 재설정 권한 (회원당 최신 요청 1개)
+CREATE TABLE IF NOT EXISTS password_resets (
+    user_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    code_hash VARCHAR(255) NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    sent_at DATETIME NOT NULL,
+    code_expires_at DATETIME NOT NULL,
+    reset_token_hash VARCHAR(64) NULL UNIQUE,
+    reset_expires_at DATETIME NULL,
+    used_at DATETIME NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 SHOW TABLES;

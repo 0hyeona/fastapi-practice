@@ -1,5 +1,10 @@
 # FastAPI Practice
 
+## 비밀번호 찾기
+
+이메일 확인 → 6자리 인증번호 발송·확인 → 새 비밀번호 설정 API를 제공합니다.
+요청 형식, 화면 연결 순서, SMTP 설정은 [비밀번호 찾기 API 안내](docs/password-reset-api.md)를 참고하세요.
+
 ## 로그인 API
 
 회원가입과 로그인은 같은 MySQL `users` 테이블을 사용합니다. 로그인 세션은
@@ -13,18 +18,18 @@
 python -m scripts.setup_login_db
 ```
 
-`POST /api/auth/login`에 다음 JSON을 전송합니다. 회원가입 때 사용한 아이디와
+`POST /api/auth/login`에 다음 JSON을 전송합니다. 회원가입 때 사용한 이메일과
 비밀번호를 입력하세요.
 
 ```json
 {
-  "user_id": "testuser",
+  "email": "testuser@example.com",
   "password": "test-password-123"
 }
 ```
 
 성공하면 `200`과 `access_token`, `token_type`, `expires_in`(3600초), `user`가
-반환됩니다. 비밀번호 오류, 없는 아이디, 비활성 계정은 동일한 `401` 응답을
+반환됩니다. 비밀번호 오류, 등록되지 않은 이메일, 비활성 계정은 동일한 `401` 응답을
 반환하며 잘못된 입력 형식은 `422`입니다.
 
 반환된 토큰을 아래 헤더에 넣어 요청합니다.
