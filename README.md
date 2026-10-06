@@ -1,5 +1,49 @@
 # FastAPI Practice
 
+## 로그인 API
+
+회원가입과 로그인은 같은 MySQL `users` 테이블을 사용합니다. 로그인 세션은
+`auth_sessions`에 저장합니다. 기존 DB에는 `sql/schema.sql`을 다시 실행하여
+세션 테이블을 추가할 수 있습니다. 기존 회원 데이터는 유지됩니다.
+
+기존 `users`에 `name` 컬럼이 없다면 아래 명령으로 컬럼과 세션 테이블을
+준비합니다. 기존 회원의 초기 이름에는 아이디를 사용합니다.
+
+```bash
+python -m scripts.setup_login_db
+```
+
+`POST /api/auth/login`에 다음 JSON을 전송합니다. 회원가입 때 사용한 아이디와
+비밀번호를 입력하세요.
+
+```json
+{
+  "user_id": "testuser",
+  "password": "test-password-123"
+}
+```
+
+성공하면 `200`과 `access_token`, `token_type`, `expires_in`(3600초), `user`가
+반환됩니다. 비밀번호 오류, 없는 아이디, 비활성 계정은 동일한 `401` 응답을
+반환하며 잘못된 입력 형식은 `422`입니다.
+
+반환된 토큰을 아래 헤더에 넣어 요청합니다.
+
+```text
+Authorization: Bearer <access_token>
+```
+
+- `GET /api/auth/me`: 로그인한 회원 정보 조회
+- `POST /api/auth/logout`: 현재 세션 삭제, 성공 시 `204`
+
+Swagger `/docs`에서 로그인 후 **Authorize** 버튼에 토큰을 입력하여 테스트할
+수 있습니다. 토큰은 1시간 뒤 만료되고 로그아웃한 토큰은 즉시 사용할 수 없습니다.
+DB에는 원본 토큰 대신 SHA-256 해시를 저장하고 날짜는 UTC로 저장합니다.
+여러 번 로그인하면 각각 독립된 세션이 생성됩니다.
+
+인증 구현 참고: [FastAPI 공식 보안 문서](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/).
+이 프로젝트는 JWT 대신 DB에서 확인하고 삭제할 수 있는 세션 토큰을 사용합니다.
+
 FastAPI를 이용한 백엔드 API 연습 및 협업용 프로젝트입니다.
 
 ## 개발 환경

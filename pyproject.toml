@@ -2,4 +2,7 @@
 name = "fastapi-practice"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pymysql>=1.2.3",
+    "sqlalchemy>=2.1.3",
+]
