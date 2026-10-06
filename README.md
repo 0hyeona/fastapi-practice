@@ -53,7 +53,8 @@ fastapi-practice/
 `README.md`는 프로젝트 안내 문서, `.gitignore`는 Git에서 제외할 파일과 폴더의 규칙을 담습니다.
 
 프로젝트 라우터와 스키마는 기본 틀만 준비되어 있습니다. 현재 구현된 API는
-`GET /`이며, 프로젝트 API와 데이터베이스 연동은 추후 추가합니다.
+`GET /`와 `POST /api/auth/signup`입니다. 회원가입은 `.env`로 설정한 MySQL의
+기존 `users` 테이블을 사용하며, 서버 실행 시 테이블을 자동 생성하지 않습니다.
 기존 `pyproject.toml`과 `uv.lock`은 프로젝트 루트에 유지합니다.
 
 ## 실행 방법
@@ -102,7 +103,22 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 5. FastAPI 서버 실행
+### 5. MySQL 설정
+
+MySQL에서 `sql/schema.sql`을 실행하여 `moeum` 데이터베이스와 `users` 테이블을
+준비합니다. 이미 있는 테이블은 이 파일로 변경되지 않습니다.
+
+프로젝트 루트의 `.env.example`을 `.env`라는 이름으로 복사하고,
+본인의 MySQL 접속 정보로 수정합니다. Windows 터미널에서는 다음을 실행합니다.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+이미 `.env`가 있으면 복사하지 말고 기존 설정을 사용합니다.
+`.env`의 실제 비밀번호는 GitHub에 올리지 않습니다.
+
+### 6. FastAPI 서버 실행
 
 ```bash
 fastapi dev app/main.py
@@ -114,7 +130,7 @@ fastapi dev app/main.py
 python -m uvicorn app.main:app --reload
 ```
 
-### 6. 서버 확인
+### 7. 서버 확인
 
 브라우저에서 아래 주소로 접속합니다.
 
@@ -122,7 +138,7 @@ python -m uvicorn app.main:app --reload
 http://127.0.0.1:8000
 ```
 
-### 7. Swagger API 문서 확인
+### 8. Swagger API 문서 확인
 
 FastAPI에서 자동으로 생성되는 Swagger 문서는 아래 주소에서 확인할 수 있습니다.
 
@@ -131,6 +147,38 @@ http://127.0.0.1:8000/docs
 ```
 
 Swagger에서 현재 구현된 API를 확인하고 직접 테스트할 수 있습니다.
+
+## 회원가입 테스트
+
+서버 실행 후 `http://127.0.0.1:8000/docs`에서 `POST /api/auth/signup`을 열고
+**Try it out**을 눌러 다음 JSON을 입력합니다.
+
+```json
+{
+  "user_id": "testuser",
+  "name": "테스트 회원",
+  "email": "testuser@example.com",
+  "password": "test-password-123"
+}
+```
+
+아이디와 이름은 앞뒤 공백을 제거한 뒤 1~50자, 비밀번호는 8~128자여야 합니다.
+이메일은 올바른 이메일 형식이어야 합니다. 성공 시 `201`, 아이디 또는 이메일
+중복 시 `409`, 입력 형식 오류 시 `422`를 반환합니다. 비밀번호는 Argon2로 해싱해
+저장하고 응답에는 비밀번호와 해시값을 포함하지 않습니다.
+
+회원가입 관련 파일:
+
+- `app/models/user.py`: 기존 users 테이블 매핑
+- `app/schemas/auth.py`: 요청 검사 및 응답 형식
+- `app/services/auth_service.py`: 중복 확인, 해싱, 저장
+- `app/routers/auth.py`: 회원가입 API
+
+자동 검증은 실제 MySQL 대신 임시 DB를 사용합니다.
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 ## 서버 종료
 
