@@ -15,6 +15,38 @@ Copy-Item .env.example .env
 - `.env`와 `tests/.env`는 Git에서 제외됩니다. 설정 후 서버를 재시작하세요.
 - 현재 서버는 프로젝트 루트의 `.env`를 읽습니다. `tests/.env`는 읽지 않습니다.
 
+## GitHub 로그인
+
+`.env`에 같은 OAuth App의 `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
+`GITHUB_REDIRECT_URI`를 설정합니다. 로컬 callback은
+`http://localhost:8000/api/auth/github/callback`입니다.
+
+기존 DB에는 한 번 `python -m scripts.setup_github_db`를 실행하여 GitHub 회원 연결
+테이블을 추가합니다. 새 DB에는 `sql/schema.sql`을 사용합니다.
+
+1. 브라우저에서 `http://localhost:8000/api/auth/github/login`을 엽니다.
+2. GitHub에 로그인하고 권한에 동의합니다.
+3. callback 성공 응답의 `access_token`은 **우리 서비스 로그인 토큰**이며,
+   `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 반환하거나 저장하지 않습니다.
+4. Swagger의 **Authorize**에 이 토큰만 입력하면 `/api/auth/me`, 프로젝트 API,
+   `/api/auth/logout`을 기존 로그인과 동일하게 사용할 수 있습니다.
+
+첫 로그인은 GitHub가 인증한 이메일로 회원을 생성하며, 이후에는 변경되지 않는
+GitHub 숫자 ID로 같은 회원을 찾습니다. 공개 프로필의 이메일이 비어 있어도
+`/user/emails`에서 인증된 이메일을 조회합니다. 인증된 이메일이 없으면 가입할 수 없습니다.
+GitHub 회원의 초기 비밀번호는 임의 값의 해시로 저장되므로 일반 비밀번호 로그인에는
+사용할 수 없습니다. 기존 이메일 재설정 절차로 비밀번호를 설정할 수 있습니다.
+
+같은 이메일로 이미 가입한 계정은 자동 연결하지 않고 `409`를 반환합니다.
+이 경우 기존 계정으로 로그인해야 합니다. 비활성 계정은 `403`으로 차단합니다.
+callback 주소 새로고침은 지원하지 않으며, 로그인 주소에서 다시 시작해야 합니다.
+
+로컬에서 기존 이메일과 겹치는 GitHub 가입을 따로 테스트하려면 `.env`의
+`GITHUB_TEST_EMAIL`에 고유한 `@example.com` 테스트 주소를 넣고 서버를 재시작합니다.
+`localhost` 또는 `127.0.0.1` 요청에서만, 첫 가입의 이메일 중복 시 이 주소를 사용합니다.
+기존 회원은 수정하지 않습니다. 임시 이메일로 이메일 발송·비밀번호 재설정은
+테스트할 수 없습니다. 배포 환경에서는 이 값을 비워두세요.
+
 ## 프로젝트 CRUD API
 
 CRUD는 생성(Create), 조회(Read), 수정(Update), 삭제(Delete)를 뜻합니다.
