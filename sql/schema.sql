@@ -43,4 +43,20 @@ CREATE TABLE IF NOT EXISTS password_resets (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
+-- 프로젝트: owner_id는 문자열 아이디가 아닌 users.id 회원 번호입니다.
+CREATE TABLE IF NOT EXISTS projects (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    owner_id BIGINT UNSIGNED NOT NULL,
+    project_name VARCHAR(100) NOT NULL,
+    description TEXT NULL,
+    github_url VARCHAR(2048) NULL,
+    figma_url VARCHAR(2048) NULL,
+    notion_url VARCHAR(2048) NULL,
+    project_status VARCHAR(20) NOT NULL DEFAULT 'active',
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX fk_projects_owner (owner_id),
+    CONSTRAINT fk_projects_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 SHOW TABLES;
