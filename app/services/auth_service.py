@@ -44,6 +44,13 @@ def login(db: Session, request: LoginRequest) -> LoginResponse:
     if not user or not user.password_hash or not valid or user.account_status != "active":
         raise InvalidCredentialsError("이메일 또는 비밀번호가 올바르지 않습니다.")
 
+    return create_login_session(db, user)
+
+
+def create_login_session(db: Session, user: User) -> LoginResponse:
+    """일반 로그인과 GitHub 로그인이 같은 세션을 사용합니다."""
+    if user.account_status != "active":
+        raise InvalidCredentialsError("사용할 수 없는 계정입니다.")
     token = secrets.token_urlsafe(32)
     now = utc_now()
     db.add(AuthSession(user_id=user.id, token_hash=hash_token(token), created_at=now,
