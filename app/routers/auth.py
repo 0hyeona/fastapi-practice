@@ -2,7 +2,7 @@
 
 import os
 import secrets
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -22,8 +22,38 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
 
 
+def frontend_callback_url() -> str | None:
+    url = os.getenv("FRONTEND_AUTH_CALLBACK_URL", "").strip()
+    if not url:
+        return None  # Keep the JSON API until the frontend callback is deployed.
+    try:
+        parsed = urlsplit(url)
+        parsed.port
+    except ValueError as exc:
+        raise HTTPException(503, "Invalid FRONTEND_AUTH_CALLBACK_URL") from exc
+    if (not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment
+            or (parsed.scheme != "https" and not (
+                parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1"}))):
+        raise HTTPException(503, "Invalid FRONTEND_AUTH_CALLBACK_URL")
+    return url
+
+
+def github_completion_response(payload: dict, status_code: int = 200):
+    destination = frontend_callback_url()
+    if not destination:
+        return JSONResponse(payload, status_code=status_code)
+    if status_code == 200:
+        values = {key: payload[key] for key in ("access_token", "token_type", "expires_in")}
+    else:
+        values = {"error": "github_login_failed", "message": payload["detail"]}
+    response = RedirectResponse(f"{destination}#{urlencode(values)}", status_code=303)
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 @router.get("/github/login")
 def github_login(request: Request):
+    frontend_callback_url()
     client_id = os.getenv("GITHUB_CLIENT_ID")
     redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
     if not client_id or not redirect_uri:
@@ -47,10 +77,11 @@ def github_login(request: Request):
     return response
 
 
-@router.get("/github/callback", response_model=LoginResponse)
+@router.get("/github/callback", response_model=None)
 async def github_callback(request: Request, code: str | None = None,
                           state: str | None = None, error: str | None = None,
                           db: Session = Depends(get_db)):
+    frontend_callback_url()
     expected_state = request.cookies.get("github_oauth_state")
     try:
         if not state or not expected_state or not secrets.compare_digest(state.encode(), expected_state.encode()):
@@ -63,14 +94,14 @@ async def github_callback(request: Request, code: str | None = None,
         # 명시적으로 설정한 로컬 테스트에서만 이메일 중복을 우회합니다.
         test_email = os.getenv("GITHUB_TEST_EMAIL") if request.url.hostname in {"localhost", "127.0.0.1"} else None
         session = github_login_session(db, user, test_email=test_email)
-        response = JSONResponse(session.model_dump(mode="json"))
+        response = github_completion_response(session.model_dump(mode="json"))
     except InvalidCredentialsError as exc:
-        response = JSONResponse({"detail": str(exc)}, status_code=403)
+        response = github_completion_response({"detail": str(exc)}, status_code=403)
     except SQLAlchemyError:
         db.rollback()
-        response = JSONResponse({"detail": "회원 로그인 정보를 저장하지 못했습니다. 잠시 후 다시 시도하세요."}, status_code=503)
+        response = github_completion_response({"detail": "회원 로그인 정보를 저장하지 못했습니다. 잠시 후 다시 시도하세요."}, status_code=503)
     except HTTPException as exc:
-        response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+        response = github_completion_response({"detail": exc.detail}, status_code=exc.status_code)
     response.delete_cookie("github_oauth_state", path="/api/auth/github")
     response.headers["Cache-Control"] = "no-store"
     return response

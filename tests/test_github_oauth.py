@@ -27,6 +27,7 @@ class GithubOAuthTests(unittest.TestCase):
             "GITHUB_CLIENT_ID": "test-client", "GITHUB_CLIENT_SECRET": "test-secret",
             "GITHUB_REDIRECT_URI": "http://localhost:8000/api/auth/github/callback",
             "GITHUB_TEST_EMAIL": "",
+            "FRONTEND_AUTH_CALLBACK_URL": "",
         })
         self.environment.start()
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
