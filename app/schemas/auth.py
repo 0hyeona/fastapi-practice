@@ -34,3 +34,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int
     user: SignupResponse
+
+
+class GithubExchangeRequest(BaseModel):
+    code: str = Field(min_length=43, max_length=43, pattern=r"^[A-Za-z0-9_-]+$")
