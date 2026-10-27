@@ -37,7 +37,7 @@ class GithubRedirectTests(unittest.TestCase):
         session = LoginResponse(access_token="app-session", expires_in=3600, user={
             "id": 1, "user_id": "test", "name": "Test", "email": "test@example.com",
             "account_status": "active", "created_at": "2026-10-27T00:00:00"})
-        with patch("app.routers.auth.fetch_github_user", profile), patch(
+        with patch("app.routers.auth.create_handoff", return_value="one-time-code"), patch("app.routers.auth.fetch_github_user", profile), patch(
                 "app.routers.auth.github_login_session", return_value=session):
             response = self.invoke(code="code", state="good")
         self.assertEqual(response.status_code, 303)
@@ -46,7 +46,7 @@ class GithubRedirectTests(unittest.TestCase):
         self.assertEqual(url.path, "/auth/github/callback")
         self.assertEqual(url.query, "")
         self.assertEqual(parse_qs(url.fragment), {
-            "access_token": ["app-session"], "token_type": ["bearer"], "expires_in": ["3600"]})
+            "login_code": ["one-time-code"]})
         self.assertNotIn("test@example.com", response.headers["location"])
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertEqual(response.headers["referrer-policy"], "no-referrer")
@@ -63,11 +63,11 @@ class GithubRedirectTests(unittest.TestCase):
                 self.assertNotIn("access_token", result)
                 fetch.assert_not_called()
 
-    def test_json_compatibility_when_redirect_disabled(self):
+    def test_missing_configuration_fails_instead_of_showing_login_json(self):
         with patch.dict(os.environ, {"FRONTEND_AUTH_CALLBACK_URL": ""}):
-            response = github_completion_response({"detail": "denied"}, 403)
-        self.assertEqual(response.status_code, 403)
-        self.assertNotIn("location", response.headers)
+            with self.assertRaises(HTTPException) as error:
+                frontend_callback_url()
+            self.assertEqual(error.exception.status_code, 503)
 
     def test_invalid_destinations_rejected(self):
         for value in ("https://", "javascript:alert(1)", "http://example.com/callback",

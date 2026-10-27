@@ -1,0 +1,76 @@
+--- a/src/api/auth.ts
++++ b/src/api/auth.ts
+@@ -71,38 +71,34 @@
+ }
+ 
+ // 같은 콜백 코드를 React StrictMode에서 두 번 교환하지 않습니다.
+-let githubExchange: { query: string; promise: Promise<LoginResponse> } | undefined;
+-export function completeGithubLogin(query: string, fragment = ''): Promise<LoginResponse> {
+-  // The backend returns the app token in a fragment, which the callback page clears.
+-  const result = new URLSearchParams(fragment.replace(/^#/, ''));
+-  const queryParams = new URLSearchParams(query);
+-  if (result.get('error') || queryParams.get('error')) {
+-    return Promise.reject(new Error('GitHub 로그인을 완료하지 못했습니다. 다시 시도해주세요.'));
++let githubExchange: { code: string; promise: Promise<LoginResponse> } | undefined;
++export function completeGithubLogin(_query: string, fragment = ''): Promise<LoginResponse> {
++  const params = new URLSearchParams(fragment.replace(/^#/, ''));
++  if (params.has('error')) {
++    return Promise.reject(new Error(params.get('message') || 'GitHub 로그인에 실패했습니다.'));
+   }
+-  if (result.has('access_token')) {
++  const code = params.get('login_code');
++  if (!code || !/^[A-Za-z0-9_-]{43}$/.test(code)) {
++    return Promise.reject(new Error('로그인 완료 코드가 없습니다. GitHub 로그인을 다시 시작해 주세요.'));
++  }
++  // Share the in-flight exchange across React StrictMode effect replays.
++  if (githubExchange?.code === code) return githubExchange.promise;
++  const promise = apiRequest<unknown>('/api/auth/github/exchange', {
++    method: 'POST',
++    body: JSON.stringify({ code }),
++    cache: 'no-store',
++    signal: AbortSignal.timeout(15000),
++  }).then(async data => {
++    const result = saveLoginResponse(data);
+     try {
+-      return Promise.resolve(saveLoginResponse({
+-        access_token: result.get('access_token'),
+-        token_type: result.get('token_type') ?? 'bearer',
+-      }));
++      await getCurrentUser(AbortSignal.timeout(15000));
+     } catch (cause) {
+-      return Promise.reject(cause);
++      clearAccessToken();
++      throw cause;
+     }
+-  }
+-
+-  // Keep compatibility with the existing code/state callback flow.
+-  if (githubExchange?.query === query) return githubExchange.promise;
+-  const params = new URLSearchParams(query);
+-  const allowed = new URLSearchParams();
+-  for (const key of ['code', 'state', 'error']) {
+-    const value = params.get(key);
+-    if (value) allowed.set(key, value);
+-  }
+-  if (!params.get('state') || (!params.get('code') && !params.get('error'))) {
+-    return Promise.reject(new Error('GitHub 인증 정보가 없습니다. 로그인을 다시 시도해주세요.'));
+-  }
+-  const promise = apiRequest<unknown>(`/api/auth/github/callback?${allowed}`).then(saveLoginResponse);
+-  githubExchange = { query, promise };
++    return result;
++  });
++  githubExchange = { code, promise };
+   return promise;
+ }
+ 
+--- a/src/pages/GithubCallbackPage.tsx
++++ b/src/pages/GithubCallbackPage.tsx
+@@ -19,7 +19,7 @@
+     // 인증 코드를 브라우저 주소에 계속 남기지 않습니다.
+     window.history.replaceState(null, '', window.location.pathname);
+     completeGithubLogin(callback.query, callback.fragment).then(() => {
+-      if (active) navigate('/projects', { replace: true });
++      if (active) navigate('/dashboard', { replace: true });
+     }).catch(cause => {
+       if (active) setError(cause instanceof Error ? cause.message : 'GitHub 로그인에 실패했습니다.');
+     });

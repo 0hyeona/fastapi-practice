@@ -27,7 +27,7 @@ class GithubOAuthTests(unittest.TestCase):
             "GITHUB_CLIENT_ID": "test-client", "GITHUB_CLIENT_SECRET": "test-secret",
             "GITHUB_REDIRECT_URI": "http://localhost:8000/api/auth/github/callback",
             "GITHUB_TEST_EMAIL": "",
-            "FRONTEND_AUTH_CALLBACK_URL": "",
+            "FRONTEND_AUTH_CALLBACK_URL": "http://localhost:5173/auth/github/callback",
         })
         self.environment.start()
         self.engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
@@ -73,7 +73,20 @@ class GithubOAuthTests(unittest.TestCase):
 
     def callback(self, **kwargs):
         state = self.start_login()
-        return self.client.get("/api/auth/github/callback", params={"state": state, "code": "test-code", **kwargs})
+        response = self.client.get("/api/auth/github/callback",
+            params={"state": state, "code": "test-code", **kwargs}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        url = urlsplit(response.headers["location"])
+        self.assertEqual(url.netloc, "localhost:5173")
+        self.assertEqual(url.query, "")
+        fields = parse_qs(url.fragment)
+        self.assertNotIn("access_token", fields)
+        self.assertNotIn("github_oauth_state", self.client.cookies)
+        if "error" in fields:
+            return httpx.Response(int(fields["error_status"][0]),
+                json={"detail": fields["message"][0]}, headers=response.headers)
+        # React exchanges our one-time code, never GitHub's authorization code.
+        return self.client.post("/api/auth/github/exchange", json={"code": fields["login_code"][0]})
 
     def test_success_and_token_privacy(self):
         response = self.callback()
@@ -104,7 +117,9 @@ class GithubOAuthTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_untrusted_callback_never_contacts_github(self):
-        self.assertEqual(self.client.get("/api/auth/github/callback?code=x").status_code, 400)
+        response = self.client.get("/api/auth/github/callback?code=x", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(parse_qs(urlsplit(response.headers["location"]).fragment)["error_status"], ["400"])
         self.assertEqual(self.callback(state="wrong").status_code, 400)
         self.assertEqual(self.callback(state="잘못된값").status_code, 400)
         self.assertEqual(self.calls, [])
