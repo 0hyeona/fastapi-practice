@@ -9,9 +9,9 @@
 Copy-Item .env.example .env
 ```
 
-- `.env`의 DB 접속 정보와 SMTP 발송 계정 정보를 채웁니다.
-- Gmail의 `SMTP_PASSWORD`에는 일반 비밀번호 대신 16자 앱 비밀번호를 입력합니다.
-- 같은 발송 계정을 공유한다면 앱 비밀번호는 비밀번호 관리 도구의 보안 공유 기능으로 전달합니다.
+- `.env`의 DB 접속 정보와 Gmail API 발송 설정을 채웁니다.
+- Render 배포 시 `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`, `GMAIL_FROM_EMAIL`을 Environment에 등록하고 재배포합니다.
+- 본인 Gmail 계정의 발송 권한을 한 번 허용하면 다른 회원에게 인증번호를 보낼 수 있습니다. [Gmail API 설정 안내](docs/password-reset-api.md#실제-이메일-발송-설정)를 따라 설정하세요.
 - `.env`와 `tests/.env`는 Git에서 제외됩니다. 설정 후 서버를 재시작하세요.
 - 현재 서버는 프로젝트 루트의 `.env`를 읽습니다. `tests/.env`는 읽지 않습니다.
 
@@ -181,7 +181,7 @@ Swagger의 이전 조회 결과는 자동으로 새로고침되지 않습니다.
 ## 비밀번호 찾기
 
 이메일 확인 → 6자리 인증번호 발송·확인 → 새 비밀번호 설정 API를 제공합니다.
-요청 형식, 화면 연결 순서, SMTP 설정은 [비밀번호 찾기 API 안내](docs/password-reset-api.md)를 참고하세요.
+요청 형식, 화면 연결 순서, Gmail API 설정은 [비밀번호 찾기 API 안내](docs/password-reset-api.md)를 참고하세요.
 
 ## 로그인 API
 
