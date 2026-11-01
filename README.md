@@ -30,7 +30,7 @@ Copy-Item .env.example .env
    `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 반환하거나 저장하지 않습니다.
 4. Swagger의 **Authorize**에 이 토큰만 입력하면 `/api/auth/me`, 프로젝트 API,
    `/api/auth/logout`을 기존 로그인과 동일하게 사용할 수 있습니다.
-
+****
 첫 로그인은 GitHub가 인증한 이메일로 회원을 생성하며, 이후에는 변경되지 않는
 GitHub 숫자 ID로 같은 회원을 찾습니다. 공개 프로필의 이메일이 비어 있어도
 `/user/emails`에서 인증된 이메일을 조회합니다. 인증된 이메일이 없으면 가입할 수 없습니다.

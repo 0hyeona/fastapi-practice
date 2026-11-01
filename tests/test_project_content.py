@@ -68,6 +68,49 @@ class ProjectContentTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["content"], "")
         self.assertEqual(response.json()["story_status"], "draft")
+        for field in ("why", "problem", "solution", "result", "learned", "next_steps", "ai_analysis"):
+            self.assertIsNone(response.json()[field])
+
+    def test_story_details_persist_and_round_trip(self):
+        details = {
+            "why": "작업 배경\n두 번째 줄", "problem": "조회 누락", "solution": "API 연결",
+            "result": "저장 완료", "learned": "필드 매핑", "next_steps": "화면 연결",
+            "ai_analysis": {"summary": "분석 결과", "items": ["개선", {"score": 0.9}], "done": True},
+        }
+        response = self.client.post("/stories", json={**self.story, **details}, headers=self.headers)
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        url = f"/stories/{body['id']}"
+        with Session(self.engine) as db:
+            stored = db.get(Story, body["id"])
+            for field, value in details.items():
+                self.assertEqual(getattr(stored, field), value)
+            self.assertEqual(Story.story_status.property.columns[0].name, "status")
+        for result in (body, self.client.get(url, headers=self.headers).json(),
+                       self.client.get(f"/stories?project_id={self.project_id}", headers=self.headers).json()[0]):
+            for field, value in details.items():
+                self.assertEqual(result[field], value)
+        changes = {"problem": "수정한 문제", "ai_analysis": {"summary": "재분석"}, "story_status": "published"}
+        updated = self.client.patch(url, json=changes, headers=self.headers)
+        self.assertEqual(updated.status_code, 200, updated.text)
+        for field, value in {**details, **changes}.items():
+            self.assertEqual(updated.json()[field], value)
+        cleared = self.client.patch(url, json={"why": None, "ai_analysis": None}, headers=self.headers)
+        self.assertEqual(cleared.status_code, 200, cleared.text)
+        fetched = self.client.get(url, headers=self.headers).json()
+        self.assertIsNone(fetched["why"])
+        self.assertIsNone(fetched["ai_analysis"])
+        self.assertEqual(fetched["problem"], changes["problem"])
+        self.assertEqual(fetched["content"], self.story["content"])
+
+    def test_story_details_validation(self):
+        for changes in ({"why": {"text": "invalid"}}, {"next_steps": "x" * 15001}):
+            response = self.client.post("/stories", json={**self.story, **changes}, headers=self.headers)
+            self.assertEqual(response.status_code, 422)
+        body = self.client.post("/stories", json=self.story, headers=self.headers).json()
+        for changes in ({"content": None}, {"story_status": None}, {"solution": []}):
+            response = self.client.patch(f"/stories/{body['id']}", json=changes, headers=self.headers)
+            self.assertEqual(response.status_code, 422)
 
     def test_validation_and_partial_update(self):
         for path, payload in (("/stories", self.story), ("/project_activities", self.activity)):

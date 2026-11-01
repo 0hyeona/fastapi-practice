@@ -13,6 +13,7 @@ from app.models.story import Story
 from app.models.project_activity import ProjectActivity
 from app.schemas.project_activity import ProjectActivityCreate, ProjectActivityUpdate
 from app.schemas.project_github import Dashboard
+from app.schemas.story import StoryCreate, StoryUpdate, StoryResponse
 from app.services import project_content_service as content
 from app.services.github_sync import sync_commits
 from app.services.project_github import GitHubClient
@@ -21,6 +22,27 @@ from test_project_github import COMMIT
 
 
 class DashboardDatabaseTests(unittest.TestCase):
+    def test_story_details_storage_and_response(self):
+        details = dict(why="배경", problem="문제", solution="해결", result="결과",
+                       learned="배운 점", next_steps="다음 작업",
+                       ai_analysis={"summary": "분석", "items": [1, {"done": True}]})
+        row = content.create(self.db, Story, StoryCreate(
+            project_id=self.project.id, title="S7", **details), self.project.owner_id)
+        story_id = row.id
+        self.db.expunge(row)
+        fetched = content.get(self.db, Story, story_id, self.project.owner_id)
+        response = StoryResponse.model_validate(fetched).model_dump()
+        for key, value in details.items():
+            self.assertEqual(response[key], value)
+        changed = content.update(self.db, Story, story_id, self.project.owner_id,
+                                 StoryUpdate(why=None, ai_analysis={"summary": "수정"}, story_status="published"))
+        self.assertIsNone(changed.why)
+        self.assertEqual(changed.problem, details["problem"])
+        self.assertEqual(changed.ai_analysis, {"summary": "수정"})
+        self.assertEqual(changed.story_status, "published")
+        cleared = content.update(self.db, Story, story_id, self.project.owner_id, StoryUpdate(ai_analysis=None))
+        self.assertIsNone(StoryResponse.model_validate(cleared).ai_analysis)
+
     def setUp(self):
         self.engine = create_engine('sqlite://')
         with self.engine.connect() as c:
