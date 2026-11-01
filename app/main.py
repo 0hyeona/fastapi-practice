@@ -1,9 +1,10 @@
+from app.routers import project_github
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import auth, password_reset, projects
+from app.routers import auth, password_reset, projects, stories, project_activities
 
 app = FastAPI()
 app.add_middleware(
@@ -15,6 +16,9 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(projects.router)
+app.include_router(project_github.router)
+app.include_router(stories.router)
+app.include_router(project_activities.router)
 app.include_router(auth.router)
 app.include_router(password_reset.router)
 

@@ -442,3 +442,13 @@ __pycache__/
 *.pyc
 *.iml
 ```
+
+
+## Story / Project Activities API
+
+Story 작성·관리와 GitHub/Figma/Notion 변경사항 등록·관리 API: [사용 문서](docs/story-activity-api.md).
+기존 DB에는 `sql/migrate_stories_activities.sql`을 먼저 적용합니다.
+
+### GitHub dashboard
+
+DB 테이블, IntelliJ 연결, 신규 API 실행 방법: [GitHub dashboard guide](docs/github-dashboard-api.md).
