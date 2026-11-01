@@ -53,5 +53,5 @@ Story 삭제 시 활동은 유지되고 story_id가 null이 됩니다.
 새 DB의 테이블 생성은 sql/schema.sql, 기존 테이블 점검은 scripts/setup_dashboard_db.py를 사용합니다.
 CREATE TABLE IF NOT EXISTS는 이미 있는 테이블의 구조를 변경하지 않습니다.
 GitHub 커밋 수집은 POST /api/projects/{project_id}/github/sync를 명시적으로 호출합니다.
-Figma/Notion 자동 수집, 주기적 스케줄러, 웹훅은 포함하지 않습니다.
+Figma/Notion 수집 API와 링크 저장 후 최초 수집은 [연동 안내](figma-notion-sync.md)를 참고하세요. 주기적 스케줄러와 웹훅은 포함하지 않습니다.
 Swagger 사용 순서와 DB 적용 명령은 [github-dashboard-api.md](github-dashboard-api.md)를 참고하세요.

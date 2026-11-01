@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response, status
+from fastapi import BackgroundTasks, APIRouter, Depends, HTTPException, Path, Query, Response, status
 from sqlalchemy.orm import Session
 
 from app.database.database import get_db
@@ -10,15 +10,18 @@ from app.models.user import User
 from app.routers.auth import current_user as get_current_user
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.services import project_service
+from app.services.initial_sync import queue_initial_sync
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.post("", response_model=ProjectResponse, status_code=status.HTTP_201_CREATED, summary="프로젝트 생성")
-def create_project(request: ProjectCreate, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def create_project(request: ProjectCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     if request.owner_id is not None and request.owner_id != user.id:
         raise HTTPException(status_code=403, detail="다른 회원의 프로젝트를 생성할 수 없습니다.")
-    return project_service.create_project(db, request, user.id)
+    project = project_service.create_project(db, request, user.id)
+    queue_initial_sync(background_tasks, project, ("figma", "notion"))
+    return project
 
 
 @router.get("", response_model=list[ProjectResponse], summary="내 프로젝트 목록 조회")
@@ -42,12 +45,13 @@ def get_project(
 
 @router.patch("/{project_id}", response_model=ProjectResponse, summary="프로젝트 수정")
 def update_project(
-    request: ProjectUpdate, project_id: int = Path(gt=0),
+    request: ProjectUpdate, background_tasks: BackgroundTasks, project_id: int = Path(gt=0),
     db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
     project = project_service.update_project(db, project_id, user.id, request)
     if project is None:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
+    queue_initial_sync(background_tasks, project, (source for source in ("figma", "notion") if source + "_url" in request.model_fields_set))
     return project
 
 

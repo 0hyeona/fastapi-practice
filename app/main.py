@@ -1,4 +1,5 @@
-from app.routers import project_github
+from app.routers import project_sync_runs
+from app.routers import project_github, project_integrations, project_connections
 import os
 
 from fastapi import FastAPI
@@ -17,6 +18,9 @@ app.add_middleware(
 )
 app.include_router(projects.router)
 app.include_router(project_github.router)
+app.include_router(project_integrations.router)
+app.include_router(project_connections.router)
+app.include_router(project_sync_runs.router)
 app.include_router(stories.router)
 app.include_router(project_activities.router)
 app.include_router(auth.router)

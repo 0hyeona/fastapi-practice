@@ -452,3 +452,9 @@ Story 작성·관리와 GitHub/Figma/Notion 변경사항 등록·관리 API: [�
 ### GitHub dashboard
 
 DB 테이블, IntelliJ 연결, 신규 API 실행 방법: [GitHub dashboard guide](docs/github-dashboard-api.md).
+
+### Figma / Notion integrations
+
+변경사항 수집, 서버 토큰 설정 및 Swagger 사용법: [연동 안내](docs/figma-notion-sync.md).
+
+- 수집 실행 이력 및 DB 추가 방법: [project-sync-runs.md](docs/project-sync-runs.md)

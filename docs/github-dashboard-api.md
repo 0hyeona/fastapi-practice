@@ -42,7 +42,7 @@ GitHub 전용 조회와 동기화 API는 미연결 상태에서 409를 반환합
 동기화는 명시적으로 호출해야 합니다. GET은 DB에 저장하지 않습니다.
 주기적 수집기/웹훅은 없습니다. 동일 프로젝트·저장소·SHA는 반복 수집해도 중복 저장하지 않으며
 기존 Story 연결은 유지합니다. 프로젝트 행 잠금으로 동시 동기화를 직렬화합니다.
-Figma/Notion 외부 수집은 별도이며, 현재 DB에 등록된 활동의 개수만 집계합니다.
+Figma/Notion 수집은 [연동 안내](figma-notion-sync.md)의 별도 sync API와 링크 저장 후 최초 수집으로 처리합니다.
 비공개 저장소는 기존 GITHUB_TOKEN, GITHUB_TOKEN_OWNER_ID,
 GITHUB_ALLOWED_REPOSITORIES 설정을 사용합니다. 사용자별 OAuth 토큰 저장은 구현하지 않습니다.
 
