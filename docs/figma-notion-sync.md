@@ -52,7 +52,7 @@ configured=true는 환경 변수 설정 검사 결과이며 토큰 유효성/외
 | Figma | 연결한 파일의 현재 버전 및 API가 제공하는 버전 기록 | 레이어별 diff/모든 편집 동작은 제공하지 않음 |
 | Notion | 연결한 페이지 하나의 최근 수정 상태, 제목, 수정 시각, 링크 | 하위 페이지/데이터베이스 전체 수집 및 과거 편집 이력 복원은 포함하지 않음 |
 
-Notion 첫 수집은 현재 수정 상태 1건을 저장합니다. 이후 last_edited_time이 바뀐 경우에만 새 활동을 저장합니다.
+Notion: first collection stores a baseline only; subsequent collections compare text and title. See notion-content-diff.md.
 수집 사이의 여러 수정은 하나의 관측 상태로 합쳐질 수 있습니다.
 Figma는 파일키와 버전 ID로 중복을 방지합니다. 현재 버전이 버전 기록에도 있으면 한 건만 저장합니다.
 버전 기록 응답의 has_next=true이면 next_cursor 값을 다음 요청의 cursor에 그대로 넣습니다.

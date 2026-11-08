@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.models.project import Project
 from app.models.project_activity import ProjectActivity
+from app.models.project_notion_snapshot import ProjectNotionSnapshot  # register metadata
 from app.services.sync_history import record_sync
 
 
@@ -146,34 +147,18 @@ def collect_figma(project, cursor=None):
         raise HTTPException(502, 'Figma 변경사항 응답 형식이 올바르지 않습니다.') from None
 
 
-def collect_notion(project):
-    resource = resource_id('notion', project.notion_url)
-    token = scoped_token('notion', project.owner_id, resource)
-    data = fetch_json('notion', f'https://api.notion.com/v1/pages/{resource}',
-                      {'Authorization': f'Bearer {token}', 'Notion-Version': '2026-03-11'})
-    try:
-        if data['object'] != 'page' or UUID(data['id']).hex != resource:
-            raise ValueError()
-        title = next((prop['title'] for prop in data['properties'].values() if prop.get('type') == 'title'), [])
-        name = ''.join(part.get('plain_text', part.get('text', {}).get('content', '')) for part in title)
-        timestamp = data['last_edited_time']
-        # This is an observed page revision, not an assertion of full edit history.
-        row = event(resource, occurred_at(timestamp).isoformat(), name or 'Notion 페이지 변경',
-                    '수집 시점에 확인한 페이지 최근 수정 상태', f'https://www.notion.so/{resource}',
-                    timestamp, 'page_updated')
-        return [row], None
-    except (KeyError, TypeError, ValueError, AttributeError):
-        raise HTTPException(502, 'Notion 페이지 응답 형식이 올바르지 않습니다.') from None
-
-
 def _sync_external(db, project, source, cursor, progress):
     if source not in ('figma', 'notion'):
         raise HTTPException(422, '지원하지 않는 서비스입니다.')
     if source == 'notion' and cursor:
         raise HTTPException(422, 'Notion 페이지 동기화에는 cursor가 없습니다.')
+    if source == 'notion':
+        import sys
+        from app.services.notion_content import sync
+        return sync(db, project, progress, sys.modules[__name__])
     original_url = getattr(project, source + '_url')
     original_owner = project.owner_id
-    rows, next_cursor = collect_figma(project, cursor) if source == 'figma' else collect_notion(project)
+    rows, next_cursor = collect_figma(project, cursor)
     progress["fetched"] = len(rows)
     locked = db.scalar(select(Project).where(Project.id == project.id).with_for_update().execution_options(populate_existing=True))
     if locked is None or locked.owner_id != original_owner or getattr(locked, source + '_url') != original_url:

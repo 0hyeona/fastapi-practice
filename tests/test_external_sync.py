@@ -47,12 +47,12 @@ class IntegrationTests(unittest.TestCase):
             return service.sync_external(self.db, self.project, 'figma')
 
     def sync_notion(self, data=NOTION):
-        with patch.object(service, 'fetch_json', return_value=data):
+        with patch.object(service, 'fetch_json', side_effect=[data, {'object':'list','results':[], 'has_more':False}, data]):
             return service.sync_external(self.db, self.project, 'notion')
 
     def test_collect_deduplicate_and_preserve_story(self):
         self.assertEqual(self.sync_figma()['created'],1)
-        self.assertEqual(self.sync_notion()['created'],1)
+        self.assertEqual(self.sync_notion()['created'],0)
         story = test_dashboard_database.DashboardDatabaseTests.story(self)
         activity = self.db.scalar(select(ProjectActivity).where(ProjectActivity.source=='figma'))
         content.update(self.db, ProjectActivity, activity.id, self.project.owner_id, ProjectActivityUpdate(story_id=story.id))
@@ -61,10 +61,10 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(activity.story_id,story.id)
         result = Dashboard.model_validate(dashboard(self.project,self.db))
         self.assertEqual(result.unorganized_counts.figma,0)
-        self.assertEqual(result.unorganized_counts.notion,1)
+        self.assertEqual(result.unorganized_counts.notion,0)
         changed = {**NOTION,'last_edited_time':'2026-11-01T01:00:00Z'}
-        self.assertEqual(self.sync_notion(changed)['created'],1)
-        self.assertEqual(Dashboard.model_validate(dashboard(self.project,self.db)).unorganized_counts.notion,2)
+        self.assertEqual(self.sync_notion(changed)['created'],0)
+        self.assertEqual(Dashboard.model_validate(dashboard(self.project,self.db)).unorganized_counts.notion,0)
 
     def test_url_validation(self):
         self.assertEqual(service.resource_id('notion',f'https://abc.notion.site/Notes-{PAGE}?v=ignored'),PAGE)

@@ -60,9 +60,11 @@ class SyncHistoryTests(unittest.TestCase):
 
     def test_external_services_success_and_failure(self):
         for source in ('figma', 'notion'):
-            with patch('app.services.external_sync.collect_'+source, return_value=([], None)):
+            target = 'app.services.external_sync.collect_figma' if source == 'figma' else 'app.services.notion_content.sync'
+            result = ([], None) if source == 'figma' else {'fetched': 0, 'created': 0, 'existing': 0}
+            with patch(target, return_value=result):
                 sync_external(self.db, self.project, source)
-            with patch('app.services.external_sync.collect_'+source, side_effect=HTTPException(403, 'secret')):
+            with patch(target, side_effect=HTTPException(403, 'secret')):
                 with self.assertRaises(HTTPException):
                     sync_external(self.db, self.project, source)
         self.assertEqual([(r.source,r.status) for r in self.runs()], [('figma','success'),('figma','failed'),('notion','success'),('notion','failed')])
