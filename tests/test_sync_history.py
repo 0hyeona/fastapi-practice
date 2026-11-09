@@ -1,4 +1,5 @@
 import copy
+import os
 import unittest
 from datetime import datetime
 from unittest.mock import patch
@@ -58,6 +59,7 @@ class SyncHistoryTests(unittest.TestCase):
         run = self.runs()[0]
         self.assertEqual((run.status, run.fetched, run.created), ('failed',2,0))
 
+    @patch.dict(os.environ, {'FIGMA_SYNC_MIN_INTERVAL_SECONDS': '0'})
     def test_external_services_success_and_failure(self):
         for source in ('figma', 'notion'):
             target = 'app.services.external_sync.collect_figma' if source == 'figma' else 'app.services.notion_content.sync'

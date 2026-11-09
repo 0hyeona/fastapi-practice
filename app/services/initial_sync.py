@@ -26,6 +26,6 @@ def initial_sync(project_id, owner_id, sources):
 
 
 def queue_initial_sync(background_tasks, project, sources):
-    sources = tuple(source for source in sources if getattr(project, source + '_url'))
+    sources = tuple(source for source in sources if source != 'figma' and getattr(project, source + '_url'))
     if sources:
         background_tasks.add_task(initial_sync, project.id, project.owner_id, sources)

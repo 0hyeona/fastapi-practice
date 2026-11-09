@@ -25,6 +25,12 @@ class ConnectionState(BaseModel):
     detail: str
 
 
+@router.get('/{project_id}/figma/sync-status')
+def figma_sync_status(project=Depends(owned_project), db: Session = Depends(get_db)):
+    from app.services.figma_sync_policy import state
+    return state(db, project.id)
+
+
 @router.get('/{project_id}/integrations', response_model=dict[str, ConnectionState], summary='Figma·Notion 연결 설정 확인')
 def integrations(project=Depends(owned_project)):
     return {source: connection_state(project, source) for source in ('figma', 'notion')}

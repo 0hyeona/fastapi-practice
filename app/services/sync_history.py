@@ -12,7 +12,14 @@ def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def record_sync(db, project, source, collect):
+def record_sync(db, project, source, collect, pagination=False):
+    if source == 'figma':
+        from app.services.figma_sync_policy import guard
+        try:
+            guard(db, project.id, pagination)
+        except Exception:
+            db.rollback()
+            raise
     run = ProjectSyncRun(project_id=project.id, source=source, status="running", started_at=utcnow())
     try:
         db.add(run)
@@ -54,6 +61,9 @@ def record_sync(db, project, source, collect):
                 failed.existing = 0
                 failed.error_code = code
                 failed.error_message = messages.get(code, "Collection failed; check server configuration and logs.")
+                if source == 'figma' and code == 429:
+                    from app.services.figma_sync_policy import rate_limit_message
+                    failed.error_message = rate_limit_message(error)
                 db.commit()
         except Exception:
             db.rollback()

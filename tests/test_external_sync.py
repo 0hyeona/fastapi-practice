@@ -33,7 +33,7 @@ class IntegrationTests(unittest.TestCase):
         self.project.figma_url = 'https://www.figma.com/design/ABC123/Test'
         self.project.notion_url = 'https://www.notion.so/Notes-' + PAGE
         self.db.commit()
-        self.env = patch.dict(os.environ, {'FIGMA_TOKEN':'test-figma-token', 'FIGMA_TOKEN_OWNER_ID':str(self.project.owner_id),
+        self.env = patch.dict(os.environ, {'FIGMA_SYNC_MIN_INTERVAL_SECONDS':'0', 'FIGMA_TOKEN':'test-figma-token', 'FIGMA_TOKEN_OWNER_ID':str(self.project.owner_id),
             'FIGMA_ALLOWED_FILE_KEYS':'ABC123', 'NOTION_TOKEN':'test-notion-token',
             'NOTION_TOKEN_OWNER_ID':str(self.project.owner_id), 'NOTION_ALLOWED_PAGE_IDS':PAGE})
         self.env.start()
@@ -116,7 +116,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count()).select_from(ProjectActivity)),0)
 
     def test_http_errors_and_safe_headers(self):
-        for code,expected in [(401,502),(403,502),(404,404),(429,503),(500,502),(302,502)]:
+        for code,expected in [(401,502),(403,502),(404,404),(429,429),(500,502),(302,502)]:
             with patch('httpx.Client.get',return_value=httpx.Response(code,headers={'Retry-After':'30'},text='private-token')):
                 with self.assertRaises(HTTPException) as e:
                     service.fetch_json('figma','https://api.figma.com/v1/files/ABC123',{})
@@ -135,7 +135,7 @@ class IntegrationTests(unittest.TestCase):
         user=SimpleNamespace(id=self.project.owner_id)
         tasks=BackgroundTasks()
         created=project_routes.create_project(ProjectCreate(project_name='New',figma_url=self.project.figma_url),tasks,self.db,user)
-        self.assertEqual(tasks.tasks[0].args,(created.id,user.id,('figma',)))
+        self.assertEqual(tasks.tasks, [])
         tasks=BackgroundTasks()
         project_routes.update_project(ProjectUpdate(notion_url=self.project.notion_url),tasks,self.project.id,self.db,user)
         self.assertEqual(tasks.tasks[0].args,(self.project.id,user.id,('notion',)))

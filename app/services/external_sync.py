@@ -79,7 +79,7 @@ def fetch_json(source, url, headers, params=None):
     if response.status_code == 429:
         retry = response.headers.get('retry-after', '')
         headers = {'Retry-After': retry} if retry.isdigit() else None
-        raise HTTPException(503, f'{source} 요청 한도 초과. 잠시 후 재시도하세요.', headers=headers)
+        raise HTTPException(429 if source == 'figma' else 503, f'{source} 요청 한도 초과. 잠시 후 재시도하세요.', headers=headers)
     if response.status_code in (401, 403):
         raise HTTPException(502, f'{source} 토큰·읽기 권한·페이지 공유 설정을 확인하세요.')
     if response.status_code == 404:
@@ -181,4 +181,4 @@ def _sync_external(db, project, source, cursor, progress):
 def sync_external(db, project, source, cursor=None):
     if source not in ("figma", "notion"):
         raise HTTPException(422, "Unsupported source.")
-    return record_sync(db, project, source, lambda progress: _sync_external(db, project, source, cursor, progress))
+    return record_sync(db, project, source, lambda progress: _sync_external(db, project, source, cursor, progress), pagination=bool(cursor))
