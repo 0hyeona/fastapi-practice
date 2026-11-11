@@ -15,6 +15,7 @@ app.add_middleware(
     ).split(",") if origin.strip()],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
+    expose_headers=["Content-Disposition"],
 )
 app.include_router(projects.router)
 app.include_router(project_github.router)

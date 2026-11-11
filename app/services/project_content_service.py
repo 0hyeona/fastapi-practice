@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from app.models.project import Project
+from app.models.project_activity import ProjectActivity
 from app.models.story import Story
 
 
@@ -38,11 +39,38 @@ def values(request, exclude_unset=True):
     return data
 
 
+def selected_activities(db, project_id, activity_ids, *, lock=False):
+    query = select(ProjectActivity).where(
+        ProjectActivity.project_id == project_id, ProjectActivity.id.in_(activity_ids)
+    ).order_by(ProjectActivity.id)
+    if lock:
+        query = query.with_for_update()
+    activities = {activity.id: activity for activity in db.scalars(query)}
+    if len(activities) != len(set(activity_ids)):
+        raise HTTPException(404, "Some activities were not found in this project.")
+    return [activities[activity_id] for activity_id in dict.fromkeys(activity_ids)]
+
+
 def create(db, model, request, owner_id):
     require_project(db, request.project_id, owner_id)
     validate_story(db, request.project_id, getattr(request, "story_id", None))
-    record = model(**values(request, exclude_unset=False))
+    data = values(request, exclude_unset=False)
+    activity_ids = data.pop("activity_ids", [])
+    activities = []
+    if activity_ids:
+        activities = selected_activities(db, request.project_id, activity_ids, lock=True)
+        if any(activity.story_id is not None for activity in activities):
+            raise HTTPException(409, "Some activities are already linked to a Story.")
+    record = model(**data)
     db.add(record)
+    if activities:
+        try:
+            db.flush()
+        except SQLAlchemyError:
+            db.rollback()
+            raise
+        for activity in activities:
+            activity.story_id = record.id
     return save(db, record)
 
 

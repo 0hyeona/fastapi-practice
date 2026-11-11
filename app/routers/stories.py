@@ -4,14 +4,33 @@ from app.database.database import get_db
 from app.models.user import User
 from app.models.story import Story
 from app.routers.auth import current_user
-from app.schemas.story import StoryCreate, StoryUpdate, StoryResponse, StoryStatus
+from app.schemas.story import StoryAnalysis, StoryAnalysisRequest, StoryCreate, StoryResponse, StoryStatus, StoryUpdate
 from app.services import project_content_service as service
+from app.services import story_analysis, story_export
 
 router = APIRouter(prefix="/stories", tags=["stories"])
 
 
+@router.post(
+    "/analyze",
+    response_model=StoryAnalysis,
+    response_model_exclude_unset=True,
+    summary="선택한 변경사항 AI 분석",
+    description="선택한 변경사항의 제목과 설명을 OpenAI로 보내 Story 초안을 생성합니다.",
+    responses={404: {"description": "프로젝트 또는 변경사항을 찾을 수 없음"},
+               502: {"description": "AI 분석 응답 오류"},
+               503: {"description": "AI 분석 설정 필요"},
+               504: {"description": "AI 분석 시간 초과"}},
+)
+def analyze_activities(
+    request: StoryAnalysisRequest, db: Session = Depends(get_db), user: User = Depends(current_user),
+):
+    return story_analysis.analyze(db, request, user.id)
+
+
 @router.post("", response_model=StoryResponse, status_code=201,
-             summary="스토리 작성", description="프로젝트의 작업 내용과 기록을 작성합니다. 초안(draft) 또는 발행(published) 상태로 저장할 수 있습니다.")
+             summary="스토리 작성", description="스토리를 초안(draft) 또는 발행(published) 상태로 저장하고 선택한 변경사항을 함께 연결합니다.",
+             responses={409: {"description": "이미 Story에 연결된 변경사항이 있음"}})
 def create_record(request: StoryCreate, db: Session = Depends(get_db), user: User = Depends(current_user)):
     return service.create(db, Story, request, user.id)
 
@@ -31,6 +50,22 @@ def list_records(
             description="내 프로젝트에 속한 스토리 한 건의 상세 정보를 조회합니다.")
 def get_record(story_id: int = Path(gt=0, description="스토리 ID"), db: Session = Depends(get_db), user: User = Depends(current_user)):
     return service.get(db, Story, story_id, user.id)
+
+
+@router.get(
+    "/{story_id}/export",
+    response_class=Response,
+    summary="스토리 Markdown 내보내기",
+    responses={200: {"content": {"text/markdown": {"schema": {"type": "string"}}}}},
+)
+def export_record(story_id: int = Path(gt=0), db: Session = Depends(get_db), user: User = Depends(current_user)):
+    story = service.get(db, Story, story_id, user.id)
+    return Response(
+        content=story_export.markdown(story),
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="story-{story_id}.md"',
+                 "Cache-Control": "private, no-store"},
+    )
 
 
 @router.patch("/{story_id}", response_model=StoryResponse, summary="스토리 수정",

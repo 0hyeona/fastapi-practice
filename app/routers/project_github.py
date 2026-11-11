@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
@@ -62,9 +64,10 @@ def dashboard(project=Depends(owned_project), db: Session = Depends(get_db)):
 @router.get("/{project_id}/activities", response_model=list[ProjectActivityResponse], summary="프로젝트 변경사항 조회")
 def project_activities(project=Depends(owned_project), db: Session = Depends(get_db),
                        unorganized: bool | None = None, source: Source | None = None,
-                       limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
+                       limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
+                       story_id: Annotated[int | None, Query(gt=0, description="연결된 Story ID")] = None):
     return content.list_records(db, ProjectActivity, project.owner_id, project.id, limit, offset,
-                                ProjectActivity.occurred_at, source=source, unorganized=unorganized)
+                                ProjectActivity.occurred_at, source=source, unorganized=unorganized, story_id=story_id)
 
 
 @router.get("/{project_id}/stories", response_model=list[StoryResponse], summary="프로젝트 Story 목록")

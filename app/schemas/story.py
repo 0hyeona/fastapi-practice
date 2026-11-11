@@ -5,6 +5,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints,
 Title = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 Content = Annotated[str, StringConstraints(max_length=15000)]
 StoryStatus = Literal["draft", "published"]
+ActivityId = Annotated[int, Field(gt=0)]
+SelectedActivityIds = Annotated[list[ActivityId], Field(max_length=20)]
+AnalysisSection = Literal["tags", "title", "before", "after", "summary"]
+AnalysisText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=3000)]
+Tag = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40)]
 
 
 class StoryDetails(BaseModel):
@@ -23,6 +28,9 @@ class StoryCreate(StoryDetails):
     title: Title
     content: Content = ""
     story_status: StoryStatus = "draft"
+    activity_ids: SelectedActivityIds = Field(
+        default_factory=list, description="Story 작성과 동시에 연결할 미정리 변경사항 ID"
+    )
 
 
 class StoryUpdate(StoryDetails):
@@ -50,3 +58,19 @@ class StoryResponse(StoryDetails):
     story_status: StoryStatus
     created_at: datetime
     updated_at: datetime
+
+
+class StoryAnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    project_id: int = Field(gt=0)
+    activity_ids: SelectedActivityIds = Field(min_length=1)
+    section: AnalysisSection | None = Field(default=None, description="재생성할 필드 (생략 시 전체 분석)")
+
+
+class StoryAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tags: list[Tag] = Field(default_factory=list, max_length=10)
+    title: Title | None = None
+    before: AnalysisText | None = None
+    after: AnalysisText | None = None
+    summary: AnalysisText | None = None
