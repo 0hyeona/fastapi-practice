@@ -5,6 +5,9 @@ from urllib.parse import urlsplit
 
 import httpx
 from fastapi import HTTPException
+from sqlalchemy import select
+from app.models.github_account import GithubAccount
+from app.services.github_credentials import decrypt_token
 
 
 def repository_name(url):
@@ -28,9 +31,15 @@ def repository_name(url):
 
 
 class GitHubClient:
-    def __init__(self, repository, owner_id):
+    def __init__(self, repository, owner_id, db=None):
         self.repository = repository
         self.headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10"}
+        ciphertext = db.scalar(select(GithubAccount.token_ciphertext).where(
+            GithubAccount.user_id == owner_id)) if db is not None else None
+        self.personal = bool(ciphertext)
+        if ciphertext:
+            self.headers["Authorization"] = f"Bearer {decrypt_token(ciphertext)}"
+            return
         # A shared token must not grant all app users access to private repositories.
         allowed = {s.strip().lower() for s in os.getenv("GITHUB_ALLOWED_REPOSITORIES", "").split(",")}
         if str(owner_id) == os.getenv("GITHUB_TOKEN_OWNER_ID", "").strip() and repository.lower() in allowed:
@@ -63,6 +72,8 @@ class GitHubClient:
         if response.status_code == 404:
             raise HTTPException(404, "GitHub 저장소 또는 브랜치/커밋을 찾을 수 없습니다.")
         if response.status_code == 401:
+            if self.personal:
+                raise HTTPException(409, "GitHub 연결이 만료되었습니다. GitHub로 다시 로그인해주세요.")
             raise HTTPException(502, "서버의 GitHub 토큰 설정을 확인해주세요.")
         if response.status_code == 422:
             raise HTTPException(422, "GitHub 조회 조건을 확인해주세요.")
