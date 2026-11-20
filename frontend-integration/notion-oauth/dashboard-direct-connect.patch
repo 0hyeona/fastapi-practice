@@ -1,0 +1,53 @@
+--- a/src/pages/DashboardPage.tsx
++++ b/src/pages/DashboardPage.tsx
+@@ -1,5 +1,6 @@
+ import { StoryLoadNotice } from '../components/StoryLoadNotice';
+-import { useEffect } from 'react';
++import { useEffect, useRef, useState } from 'react';
++import { startNotionConnection } from '../api/notion';
+ import { Link, Navigate } from 'react-router';
+ import type { ActivityState } from '../data/activity';
+ import { services, type ServiceState } from '../data/projects';
+@@ -65,7 +66,7 @@
+                   </div>
+                   <div className={styles.statNotes}>
+                     {service === 'Notion' && state.status === 'error' && (
+-                      <Link className={styles.statButton} to="/settings#notion-account">Notion 연결 설정</Link>
++                      <NotionConnectAction />
+                     )}
+                     {state.status === 'error' && <p className={styles.statError} role="alert">{state.error}</p>}
+                     {state.status === 'error' && service === 'Figma' && (
+@@ -116,6 +117,33 @@
+   );
+ }
+ 
++function NotionConnectAction() {
++  const busy = useRef(false);
++  const [pending, setPending] = useState(false);
++  const [error, setError] = useState('');
++
++  async function connect() {
++    if (busy.current) return;
++    busy.current = true;
++    setPending(true);
++    setError('');
++    try {
++      await startNotionConnection('/dashboard');
++    } catch (cause) {
++      setError(cause instanceof Error ? cause.message : 'Notion 승인 화면을 열지 못했어요.');
++      busy.current = false;
++      setPending(false);
++    }
++  }
++
++  return <>
++    <button type="button" className={styles.statButton} disabled={pending} onClick={() => void connect()}>
++      {pending ? 'Notion 승인 화면 여는 중…' : 'Notion 계정 연결'}
++    </button>
++    {error && <p className={styles.statError} role="alert">{error}</p>}
++  </>;
++}
++
+ function PendingCount({ state, count, sync }: { state: ServiceState; count: number; sync: ActivityState['status'] }) {
+   if (sync === 'pending') return <span className={styles.statStatus}>조회 준비 중</span>;
+   if (sync === 'loading') return <span className={styles.statStatus} role="status">조회 중…</span>;

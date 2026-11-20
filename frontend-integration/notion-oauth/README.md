@@ -49,3 +49,14 @@ Notion 계정 연결 성공은 모든 페이지의 접근 권한을 의미하지
 - 기존 테스트와 신규 승인 흐름 테스트 합계 45개 통과
 - 현재 프론트 소스에 대한 git apply --check 성공
 - 실제 Notion 사용자 승인, 운영 DB 변경, Render 배포는 수행하지 않음
+
+## 대시보드에서 Notion 바로 연결
+
+기본 frontend.patch를 적용한 뒤 dashboard-direct-connect.patch를 적용하면, 대시보드의 Notion 연결 버튼에서 OAuth 연결 화면을 바로 엽니다. 연결 중 중복 클릭을 막고 실패 시 다시 시도할 수 있습니다.
+
+프론트 프로젝트 루트에서 실행합니다.
+
+~~~~powershell
+git apply --check <이 폴더 경로>/dashboard-direct-connect.patch
+git apply <이 폴더 경로>/dashboard-direct-connect.patch
+~~~~

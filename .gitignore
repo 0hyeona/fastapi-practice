@@ -4,3 +4,5 @@ __pycache__/
 .env
 *.pyc
 *.iml
+# Temporary frontend validation workspace
+.notion-frontend-stage/
