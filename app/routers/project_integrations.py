@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.database.database import get_db
-from app.routers.project_github import owned_project
+from app.routers.project_github import owned_project, accessible_project
 from app.services.external_sync import connection_state, sync_external
 
 router = APIRouter(prefix='/api/projects', tags=['external-integrations'])
@@ -26,13 +26,13 @@ class ConnectionState(BaseModel):
 
 
 @router.get('/{project_id}/figma/sync-status')
-def figma_sync_status(project=Depends(owned_project), db: Session = Depends(get_db)):
+def figma_sync_status(project=Depends(accessible_project), db: Session = Depends(get_db)):
     from app.services.figma_sync_policy import state
     return state(db, project.id)
 
 
 @router.get('/{project_id}/integrations', response_model=dict[str, ConnectionState], summary='Figma·Notion 연결 설정 확인')
-def integrations(project=Depends(owned_project), db: Session = Depends(get_db)):
+def integrations(project=Depends(accessible_project), db: Session = Depends(get_db)):
     return {source: connection_state(project, source, db) for source in ('figma', 'notion')}
 
 
@@ -45,5 +45,5 @@ def sync_figma(project=Depends(owned_project), db: Session = Depends(get_db),
 
 @router.post('/{project_id}/notion/sync', response_model=ExternalSyncResult, summary='Notion 페이지 수정사항 수집',
              description='연결된 페이지 한 개의 최근 수정 상태를 저장합니다. 전체 과거 편집 이력, 하위 페이지 및 데이터베이스 항목 수집은 포함하지 않습니다.')
-def sync_notion(project=Depends(owned_project), db: Session = Depends(get_db)):
+def sync_notion(project=Depends(accessible_project), db: Session = Depends(get_db)):
     return sync_external(db, project, 'notion')

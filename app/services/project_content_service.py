@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from app.models.project import Project
+from app.services.project_access import readable_by, require_accessible_project
 from app.models.project_activity import ProjectActivity
 from app.models.story import Story
 
@@ -74,18 +75,18 @@ def create(db, model, request, owner_id):
     return save(db, record)
 
 
-def get(db, model, record_id, owner_id):
+def get(db, model, record_id, owner_id, *, shared=False):
     record = db.scalar(select(model).join(Project, model.project_id == Project.id).where(
-        model.id == record_id, Project.owner_id == owner_id))
+        model.id == record_id, readable_by(owner_id) if shared else Project.owner_id == owner_id))
     if record is None:
         raise HTTPException(status_code=404, detail="Record not found.")
     return record
 
 
 def list_records(db, model, owner_id, project_id, limit, offset, order_column, **filters):
-    query = select(model).join(Project, model.project_id == Project.id).where(Project.owner_id == owner_id)
+    query = select(model).join(Project, model.project_id == Project.id).where(readable_by(owner_id))
     if project_id is not None:
-        require_project(db, project_id, owner_id)
+        require_accessible_project(db, project_id, owner_id)
         query = query.where(model.project_id == project_id)
     for field, value in filters.items():
         if value is not None:

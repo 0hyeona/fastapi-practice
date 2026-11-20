@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.database.database import get_db
 from app.models.project_sync_run import ProjectSyncRun
-from app.routers.project_github import owned_project
+from app.routers.project_github import accessible_project
 
 Source = Literal["github", "figma", "notion"]
 Status = Literal["running", "success", "failed"]
@@ -32,7 +32,7 @@ class SyncRun(BaseModel):
 @router.get("/{project_id}/sync-runs", response_model=list[SyncRun])
 def list_runs(source: Source | None = None, status: Status | None = None,
               limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
-              project=Depends(owned_project), db: Session = Depends(get_db)):
+              project=Depends(accessible_project), db: Session = Depends(get_db)):
     query = select(ProjectSyncRun).where(ProjectSyncRun.project_id == project.id)
     if source:
         query = query.where(ProjectSyncRun.source == source)

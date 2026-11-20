@@ -49,7 +49,7 @@ def list_records(
 @router.get("/{story_id}", response_model=StoryResponse, summary="스토리 상세 조회",
             description="내 프로젝트에 속한 스토리 한 건의 상세 정보를 조회합니다.")
 def get_record(story_id: int = Path(gt=0, description="스토리 ID"), db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return service.get(db, Story, story_id, user.id)
+    return service.get(db, Story, story_id, user.id, shared=True)
 
 
 @router.get(
@@ -59,7 +59,7 @@ def get_record(story_id: int = Path(gt=0, description="스토리 ID"), db: Sessi
     responses={200: {"content": {"text/markdown": {"schema": {"type": "string"}}}}},
 )
 def export_record(story_id: int = Path(gt=0), db: Session = Depends(get_db), user: User = Depends(current_user)):
-    story = service.get(db, Story, story_id, user.id)
+    story = service.get(db, Story, story_id, user.id, shared=True)
     return Response(
         content=story_export.markdown(story),
         media_type="text/markdown",

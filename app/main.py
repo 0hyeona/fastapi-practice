@@ -1,4 +1,4 @@
-from app.routers import project_sync_runs
+from app.routers import project_sync_runs, project_members
 from app.routers import project_github, project_integrations, project_connections, notion_oauth
 import os
 
@@ -18,6 +18,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 app.include_router(projects.router)
+app.include_router(project_members.router)
 app.include_router(project_github.router)
 app.include_router(project_integrations.router)
 app.include_router(notion_oauth.router)

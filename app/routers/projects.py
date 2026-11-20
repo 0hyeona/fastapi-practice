@@ -10,6 +10,7 @@ from app.models.user import User
 from app.routers.auth import current_user as get_current_user
 from app.schemas.project import ProjectCreate, ProjectResponse, ProjectUpdate
 from app.services import project_service
+from app.services.project_access import get_accessible_project
 from app.services.initial_sync import queue_initial_sync
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -37,7 +38,7 @@ def list_projects(
 def get_project(
     project_id: int = Path(gt=0), db: Session = Depends(get_db), user: User = Depends(get_current_user),
 ):
-    project = project_service.get_project(db, project_id, user.id)
+    project = get_accessible_project(db, project_id, user.id)
     if project is None:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다.")
     return project

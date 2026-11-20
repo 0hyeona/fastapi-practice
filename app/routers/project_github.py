@@ -28,12 +28,17 @@ def owned_project(project_id: int = Path(gt=0), db: Session = Depends(get_db), u
     return project
 
 
-def github_client(project=Depends(owned_project)):
+def accessible_project(project_id: int = Path(gt=0), db: Session = Depends(get_db), user: User = Depends(current_user)):
+    from app.services.project_access import require_accessible_project
+    return require_accessible_project(db, project_id, user.id)
+
+
+def github_client(project=Depends(accessible_project)):
     return GitHubClient(repository_name(project.github_url), project.owner_id)
 
 
 @router.get("/{project_id}/dashboard", response_model=Dashboard, summary="대시보드 요약")
-def dashboard(project=Depends(owned_project), db: Session = Depends(get_db)):
+def dashboard(project=Depends(accessible_project), db: Session = Depends(get_db)):
     counts = {"github": 0, "figma": 0, "notion": 0}
     rows = db.execute(select(ProjectActivity.source, func.count()).where(
         ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None)
@@ -62,7 +67,7 @@ def dashboard(project=Depends(owned_project), db: Session = Depends(get_db)):
 
 
 @router.get("/{project_id}/activities", response_model=list[ProjectActivityResponse], summary="프로젝트 변경사항 조회")
-def project_activities(project=Depends(owned_project), db: Session = Depends(get_db),
+def project_activities(project=Depends(accessible_project), db: Session = Depends(get_db),
                        unorganized: bool | None = None, source: Source | None = None,
                        limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0),
                        story_id: Annotated[int | None, Query(gt=0, description="연결된 Story ID")] = None):
@@ -71,7 +76,7 @@ def project_activities(project=Depends(owned_project), db: Session = Depends(get
 
 
 @router.get("/{project_id}/stories", response_model=list[StoryResponse], summary="프로젝트 Story 목록")
-def project_stories(project=Depends(owned_project), db: Session = Depends(get_db),
+def project_stories(project=Depends(accessible_project), db: Session = Depends(get_db),
                     story_status: StoryStatus | None = None,
                     limit: int = Query(50, ge=1, le=100), offset: int = Query(0, ge=0)):
     return content.list_records(db, Story, project.owner_id, project.id, limit, offset,

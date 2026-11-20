@@ -5,6 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
+from app.services.project_access import readable_by
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 
@@ -26,7 +27,7 @@ def create_project(db: Session, request: ProjectCreate, owner_id: int) -> Projec
 
 
 def list_projects(db: Session, owner_id: int, limit: int, offset: int, project_status: str = "active"):
-    query = select(Project).where(Project.owner_id == owner_id)
+    query = select(Project).where(readable_by(owner_id))
     if project_status != "all":
         query = query.where(Project.project_status == project_status)
     return db.scalars(

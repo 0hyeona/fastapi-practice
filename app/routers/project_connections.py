@@ -7,7 +7,7 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from app.database.database import get_db
 from app.models.project_activity import ProjectActivity
-from app.routers.project_github import owned_project
+from app.routers.project_github import owned_project, accessible_project
 from app.schemas.project import ProjectLink, ProjectResponse, ProjectUpdate
 from app.schemas.project_activity import Source
 from app.services.external_sync import resource_id, scoped_token
@@ -62,12 +62,12 @@ def describe_connection(project, source, db=None):
 
 
 @router.get('/{project_id}', response_model=ProjectResponse, summary='프로젝트 상세 조회')
-def project_detail(project=Depends(owned_project)):
+def project_detail(project=Depends(accessible_project)):
     return project
 
 
 @router.get('/{project_id}/connections', response_model=Connections, summary='GitHub·Notion·Figma 연결 정보 및 미정리 개수')
-def connections(project=Depends(owned_project), db: Session = Depends(get_db)):
+def connections(project=Depends(accessible_project), db: Session = Depends(get_db)):
     counts = dict(db.execute(select(ProjectActivity.source, func.count()).where(
         ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None)
     ).group_by(ProjectActivity.source)).all())

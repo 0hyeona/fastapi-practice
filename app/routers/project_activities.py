@@ -31,7 +31,7 @@ def list_records(
 @router.get("/{activity_id}", response_model=ProjectActivityResponse, summary="프로젝트 변경사항 상세 조회",
             description="내 프로젝트에 속한 프로젝트 변경사항 한 건의 상세 정보를 조회합니다.")
 def get_record(activity_id: int = Path(gt=0, description="활동 내역 ID"), db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return service.get(db, ProjectActivity, activity_id, user.id)
+    return service.get(db, ProjectActivity, activity_id, user.id, shared=True)
 
 
 @router.patch("/{activity_id}", response_model=ProjectActivityResponse, summary="프로젝트 변경사항 수정",
