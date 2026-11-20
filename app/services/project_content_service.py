@@ -1,11 +1,26 @@
 """Ownership checks and persistence shared by project content APIs."""
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from app.models.project import Project
 from app.services.project_access import readable_by, require_accessible_project
 from app.models.project_activity import ProjectActivity
 from app.models.story import Story
+
+
+def current_notion_page():
+    """Filter saved Notion activities by page identity, before pagination."""
+    def page_id(url):
+        for delimiter in ('#', '?'):
+            position = func.instr(url, delimiter)
+            url = case((position > 0, func.substr(url, 1, position - 1)), else_=url)
+        url = case((func.substr(url, -1) == '/', func.substr(url, 1, func.length(url) - 1)), else_=url)
+        return func.substr(func.lower(func.replace(url, '-', '')), -32)
+
+    return or_(ProjectActivity.source != 'notion',
+               (Project.notion_url.is_not(None)) & (Project.notion_url != '') &
+               (ProjectActivity.source_url.is_not(None)) &
+               (page_id(ProjectActivity.source_url) == page_id(Project.notion_url)))
 
 
 def validate_story(db, project_id, story_id):
@@ -85,6 +100,8 @@ def get(db, model, record_id, owner_id, *, shared=False):
 
 def list_records(db, model, owner_id, project_id, limit, offset, order_column, **filters):
     query = select(model).join(Project, model.project_id == Project.id).where(readable_by(owner_id))
+    if model is ProjectActivity:
+        query = query.where(current_notion_page())
     if project_id is not None:
         require_accessible_project(db, project_id, owner_id)
         query = query.where(model.project_id == project_id)

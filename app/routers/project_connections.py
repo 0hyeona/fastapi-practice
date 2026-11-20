@@ -7,6 +7,8 @@ from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 from app.database.database import get_db
 from app.models.project_activity import ProjectActivity
+from app.models.project import Project
+from app.services.project_content_service import current_notion_page
 from app.routers.project_github import owned_project, accessible_project
 from app.schemas.project import ProjectLink, ProjectResponse, ProjectUpdate
 from app.schemas.project_activity import Source
@@ -68,11 +70,11 @@ def project_detail(project=Depends(accessible_project)):
 
 @router.get('/{project_id}/connections', response_model=Connections, summary='GitHub·Notion·Figma 연결 정보 및 미정리 개수')
 def connections(project=Depends(accessible_project), db: Session = Depends(get_db)):
-    counts = dict(db.execute(select(ProjectActivity.source, func.count()).where(
-        ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None)
+    counts = dict(db.execute(select(ProjectActivity.source, func.count()).join(Project, Project.id == ProjectActivity.project_id).where(
+        ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None), current_notion_page()
     ).group_by(ProjectActivity.source)).all())
-    stored = dict(db.execute(select(ProjectActivity.source, func.max(ProjectActivity.created_at)).where(
-        ProjectActivity.project_id == project.id).group_by(ProjectActivity.source)).all())
+    stored = dict(db.execute(select(ProjectActivity.source, func.max(ProjectActivity.created_at)).join(Project, Project.id == ProjectActivity.project_id).where(
+        ProjectActivity.project_id == project.id, current_notion_page()).group_by(ProjectActivity.source)).all())
     return {'project_id': project.id, 'connections': [dict(describe_connection(project, source, db),
         unorganized_count=counts.get(source, 0), last_activity_stored_at=stored.get(source))
         for source in ('github', 'notion', 'figma')]}

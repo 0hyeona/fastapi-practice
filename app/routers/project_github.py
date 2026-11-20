@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from app.models.project_activity import ProjectActivity
 from app.models.story import Story
+from app.models.project import Project
 from app.schemas.project_activity import ProjectActivityResponse, Source
 from app.schemas.story import StoryResponse, StoryStatus
 from app.services import project_content_service as content
@@ -43,8 +44,8 @@ def github_client(
 @router.get("/{project_id}/dashboard", response_model=Dashboard, summary="대시보드 요약")
 def dashboard(project=Depends(accessible_project), db: Session = Depends(get_db)):
     counts = {"github": 0, "figma": 0, "notion": 0}
-    rows = db.execute(select(ProjectActivity.source, func.count()).where(
-        ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None)
+    rows = db.execute(select(ProjectActivity.source, func.count()).join(Project, Project.id == ProjectActivity.project_id).where(
+        ProjectActivity.project_id == project.id, ProjectActivity.story_id.is_(None), content.current_notion_page()
     ).group_by(ProjectActivity.source)).all()
     counts.update({source: count for source, count in rows if source in counts})
     counts["total"] = sum(counts.values())

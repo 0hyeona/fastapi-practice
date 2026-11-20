@@ -108,13 +108,16 @@ class DashboardDatabaseTests(unittest.TestCase):
             content.update(self.db, ProjectActivity, activity.id, self.project.owner_id, ProjectActivityUpdate(source='figma'))
 
     def test_all_counts_order_filters_and_project_isolation(self):
+        self.project.notion_url = 'https://www.notion.so/' + 'a' * 32
         for i in range(4):
             row = self.story()
             row.title = str(i)
             row.created_at = datetime(2026, 11, 1)
         self.story(self.other)
         for source, project in [('figma', self.project), ('notion', self.project), ('github', self.other)]:
-            self.db.add(ProjectActivity(project_id=project.id,source=source,activity_type='edit',title='x',occurred_at=datetime(2026,11,1)))
+            self.db.add(ProjectActivity(project_id=project.id,source=source,activity_type='edit',title='x',
+                                       source_url=self.project.notion_url if source == 'notion' else None,
+                                       occurred_at=datetime(2026,11,1)))
         self.db.commit()
         self.sync()
         result = self.dashboard()
