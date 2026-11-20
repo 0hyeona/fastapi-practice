@@ -39,7 +39,7 @@ class ConnectionUpdate(BaseModel):
     external_url: ProjectLink | None
 
 
-def describe_connection(project, source):
+def describe_connection(project, source, db=None):
     url = getattr(project, source + '_url')
     result = dict(source=source, external_id=None, external_url=url,
                   connection_status='not_linked', detail='등록된 링크가 없습니다.')
@@ -55,7 +55,7 @@ def describe_connection(project, source):
         return dict(result, connection_status='configured' if authenticated else 'public_access_unverified',
                     detail='실제 접근 여부는 동기화 시 확인합니다.' if authenticated else '공개 저장소 조회 모드입니다. 비공개 저장소는 인증 설정이 필요합니다.')
     try:
-        scoped_token(source, project.owner_id, identifier)
+        scoped_token(source, project.owner_id, identifier, db)
     except HTTPException as error:
         return dict(result, connection_status='configuration_required', detail=error.detail)
     return dict(result, connection_status='configured', detail='서버 설정 확인 완료. 실제 접근 여부는 동기화 시 확인합니다.')
@@ -73,7 +73,7 @@ def connections(project=Depends(owned_project), db: Session = Depends(get_db)):
     ).group_by(ProjectActivity.source)).all())
     stored = dict(db.execute(select(ProjectActivity.source, func.max(ProjectActivity.created_at)).where(
         ProjectActivity.project_id == project.id).group_by(ProjectActivity.source)).all())
-    return {'project_id': project.id, 'connections': [dict(describe_connection(project, source),
+    return {'project_id': project.id, 'connections': [dict(describe_connection(project, source, db),
         unorganized_count=counts.get(source, 0), last_activity_stored_at=stored.get(source))
         for source in ('github', 'notion', 'figma')]}
 

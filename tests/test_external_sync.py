@@ -84,10 +84,42 @@ class IntegrationTests(unittest.TestCase):
                 with self.assertRaises(HTTPException):
                     service.sync_external(self.db,self.project,'figma')
                 get.assert_not_called()
-                self.assertFalse(integrations(self.project)['figma']['configured'])
-        status = str(integrations(self.project))
+                self.assertFalse(integrations(self.project,self.db)['figma']['configured'])
+        status = str(integrations(self.project,self.db))
         self.assertNotIn('test-figma-token',status)
         self.assertNotIn('test-notion-token',status)
+
+    def test_notion_allowlist_accepts_ids_and_copied_page_links(self):
+        for value in (
+            PAGE,
+            'AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA',
+            f'https://app.notion.com/p/team/Notes-{PAGE}?source=copy_link',
+            f'{"b" * 32}, https://team.notion.site/Notes-{PAGE}?v=ignored',
+        ):
+            with self.subTest(value=value), patch.dict(os.environ, {'NOTION_ALLOWED_PAGE_IDS': value}):
+                self.assertTrue(integrations(self.project,self.db)['notion']['configured'])
+                self.assertEqual(self.sync_notion()['created'], 0)
+
+    def test_notion_scope_errors_are_specific_and_block_network(self):
+        cases = (
+            ({'NOTION_TOKEN_OWNER_ID': '999'}, 409, 'Notion'),
+            ({'NOTION_ALLOWED_PAGE_IDS': 'b' * 32}, 403, 'NOTION_ALLOWED_PAGE_IDS'),
+            ({'NOTION_ALLOWED_PAGE_IDS': f'https://evil.com/{PAGE}'}, 503, 'NOTION_ALLOWED_PAGE_IDS'),
+            ({'NOTION_ALLOWED_PAGE_IDS': f'{PAGE},invalid'}, 503, 'NOTION_ALLOWED_PAGE_IDS'),
+            ({'NOTION_ALLOWED_PAGE_IDS': ''}, 503, 'NOTION_ALLOWED_PAGE_IDS'),
+            ({'NOTION_TOKEN': ''}, 409, 'Notion'),
+        )
+        for setting, code, detail in cases:
+            with self.subTest(setting=setting), patch.dict(os.environ, setting), patch.object(service, 'fetch_json') as get:
+                with self.assertRaises(HTTPException) as error:
+                    service.sync_external(self.db, self.project, 'notion')
+                self.assertEqual(error.exception.status_code, code)
+                self.assertIn(detail, error.exception.detail)
+                get.assert_not_called()
+                state = integrations(self.project,self.db)['notion']
+                self.assertFalse(state['configured'])
+                self.assertEqual(state['detail'], error.exception.detail)
+                self.assertNotIn('test-notion-token', str(state))
 
     def test_pagination_and_ssrf(self):
         cursor = 'https://api.figma.com/v1/files/ABC123/versions?before=10'
@@ -148,7 +180,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('get',paths['/api/projects/{project_id}/integrations'])
 
     def test_initial_sync_uses_new_session_and_handles_failure(self):
-        with patch('app.services.initial_sync.SessionLocal') as factory, patch('app.services.initial_sync.sync_external') as sync:
+        with patch('app.services.initial_sync.SessionLocal') as factory, patch('app.services.initial_sync.sync_external') as sync, patch('app.services.notion_oauth.user_token', return_value=None):
             factory.return_value.__enter__.return_value.get.return_value=self.project
             sync.side_effect=HTTPException(503,'Unavailable')
             initial_sync(self.project.id,self.project.owner_id,('figma','notion'))

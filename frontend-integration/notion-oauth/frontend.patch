@@ -1,0 +1,389 @@
+diff --git a/src/main.tsx b/src/main.tsx
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -9,6 +9,7 @@
+ import { PasswordResetPage } from './pages/PasswordResetPage';
+ import { SignupPage } from './pages/SignupPage';
+ import { GithubCallbackPage } from './pages/GithubCallbackPage';
++import { NotionCallbackPage } from './pages/NotionCallbackPage';
+ import { ProjectCreatePage } from './pages/ProjectCreatePage';
+ import { ProjectListPage } from './pages/ProjectListPage';
+ import { SettingsPage } from './pages/SettingsPage';
+@@ -26,6 +27,7 @@
+           <Route path="/login" element={<LoginPage />} />
+           <Route path="/signup" element={<SignupPage />} />
+           <Route path="/auth/github/callback" element={<GithubCallbackPage />} />
++          <Route path="/auth/notion/callback" element={<NotionCallbackPage />} />
+           <Route path="/password-reset" element={<PasswordResetPage />} />
+           <Route element={<AuthBoundary><Outlet /></AuthBoundary>}>
+           <Route element={<AppLayout header="centered" />}>
+diff --git a/src/pages/SettingsPage.tsx b/src/pages/SettingsPage.tsx
+--- a/src/pages/SettingsPage.tsx
++++ b/src/pages/SettingsPage.tsx
+@@ -5,6 +5,7 @@
+ import { githubRepository } from '../data/github';
+ import { useProjects } from '../state/ProjectsContext';
+ import { ConfirmDialog } from '../components/ConfirmDialog';
++import { NotionConnection } from '../components/NotionConnection';
+ import { ServiceIcon, useDocumentTitle } from '../components/ui';
+ import form from '../components/form.module.css';
+ import ui from '../components/ui.module.css';
+@@ -233,6 +234,7 @@
+ 
+   return <section className={styles.panel} aria-labelledby="tools-heading">
+     <SectionHeader id="tools-heading" title="연동 서비스" description="프로젝트에서 사용할 작업 도구의 URL을 관리합니다." />
++    <NotionConnection />
+     <StatusText message={message} />
+     {error && <p className={form.error} role="alert">{error}</p>}
+     <fieldset className={styles.fieldset} disabled={pending !== null} aria-busy={pending !== null}>
+diff --git a/src/pages/DashboardPage.tsx b/src/pages/DashboardPage.tsx
+--- a/src/pages/DashboardPage.tsx
++++ b/src/pages/DashboardPage.tsx
+@@ -64,6 +64,9 @@
+                     )}
+                   </div>
+                   <div className={styles.statNotes}>
++                    {service === 'Notion' && state.status === 'error' && (
++                      <Link className={styles.statButton} to="/settings#notion-account">Notion 연결 설정</Link>
++                    )}
+                     {state.status === 'error' && <p className={styles.statError} role="alert">{state.error}</p>}
+                     {state.status === 'error' && service === 'Figma' && (
+                       <button type="button" className={styles.statButton} disabled={figma.syncing} onClick={figma.reload}>목록 다시 조회</button>
+diff --git a/src/pages/ChangesPage.tsx b/src/pages/ChangesPage.tsx
+--- a/src/pages/ChangesPage.tsx
++++ b/src/pages/ChangesPage.tsx
+@@ -193,6 +193,7 @@
+               <div className={styles.noticeIcon}><ServiceIcon service={item} /></div>
+               <div className={styles.noticeContent}><div className={styles.noticeTitle}><strong>{item}</strong><span>{state.status === 'error' ? '불러오기 실패' : state.status === 'disconnected' ? '연결 필요' : state.status === 'ready' ? '수집 완료' : '불러오는 중'}</span></div>
+               <p>{state.status === 'loading' ? '변경사항을 수집·조회하고 있어요…' : state.status === 'pending' ? '변경사항 조회를 준비하고 있어요.' : state.status === 'disconnected' ? '서비스를 연결하면 변경사항을 모아볼 수 있어요.' : state.status === 'ready' ? `미정리 변경사항 ${project.changes.filter(change => change.service === item).length}개` : state.error}</p></div>
++              {item === 'Notion' && state.status === 'error' && <Link className={styles.textButton} to="/settings#notion-account">Notion 연결 설정</Link>}
+               {item !== 'Figma' && state.status === 'error' && <button type="button" className={styles.textButton} onClick={() => refreshActivities(item)}>다시 시도</button>}
+               {item === 'Notion' && (state.status === 'ready' || state.status === 'loading') && <button type="button" className={styles.textButton} disabled={state.status === 'loading'} onClick={() => refreshActivities(item)}>새로고침</button>}
+               {state.status === 'disconnected' && <Link className={styles.textButton} to={'/settings#settings-url-' + item}>연결하기</Link>}
+diff --git a/src/api/notion.ts b/src/api/notion.ts
+new file mode 100644
+--- /dev/null
++++ b/src/api/notion.ts
+@@ -0,0 +1,91 @@
++import { apiRequest } from './client';
++import { getAccessToken } from './auth';
++
++export type NotionConnection = {
++  connected: boolean;
++  workspace_id: string | null;
++  workspace_name: string | null;
++};
++
++const PENDING_KEY = 'moeum.notion.pending';
++const CALLBACK_PATH = '/auth/notion/callback';
++const PATHS = new Set(['/settings', '/dashboard', '/changes', '/projects']);
++
++function authorization(): HeadersInit {
++  const token = getAccessToken();
++  if (!token) throw new Error('로그인 후 Notion 연결을 다시 시작해 주세요.');
++  return { Authorization: `Bearer ${token}` };
++}
++
++export function notionReturnPath(value = '/settings#notion-account'): string {
++  const url = new URL(value, window.location.origin);
++  return url.origin === window.location.origin && PATHS.has(url.pathname)
++    ? `${url.pathname}${url.search}${url.hash}` : '/settings#notion-account';
++}
++
++function connection(data: unknown): NotionConnection {
++  if (typeof data !== 'object' || data === null || !('connected' in data)
++      || typeof data.connected !== 'boolean'
++      || !('workspace_id' in data) || !(data.workspace_id === null || typeof data.workspace_id === 'string')
++      || !('workspace_name' in data) || !(data.workspace_name === null || typeof data.workspace_name === 'string')) {
++    throw new Error('Notion 연결 상태 응답을 확인하지 못했습니다.');
++  }
++  return data as NotionConnection;
++}
++
++export async function getNotionConnection(signal?: AbortSignal): Promise<NotionConnection> {
++  return connection(await apiRequest<unknown>('/api/integrations/notion', {
++    headers: authorization(), cache: 'no-store', signal,
++  }));
++}
++
++export async function startNotionConnection(returnTo?: string): Promise<void> {
++  const result = await apiRequest<{ authorization_url: string }>('/api/integrations/notion/authorize', {
++    method: 'POST', headers: authorization(), cache: 'no-store', signal: AbortSignal.timeout(30000),
++  });
++  const url = new URL(result.authorization_url);
++  if (url.origin !== 'https://api.notion.com' || url.pathname !== '/v1/oauth/authorize') {
++    throw new Error('Notion 승인 주소가 올바르지 않습니다.');
++  }
++  const state = url.searchParams.get('state');
++  const callback = new URL(url.searchParams.get('redirect_uri') || '');
++  if (!state || callback.origin !== window.location.origin || callback.pathname !== CALLBACK_PATH) {
++    throw new Error('Notion 콜백 주소가 현재 사이트와 다릅니다. 서버의 NOTION_OAUTH_REDIRECT_URI 설정을 확인해 주세요.');
++  }
++  sessionStorage.setItem(PENDING_KEY, JSON.stringify({ state, returnTo: notionReturnPath(returnTo) }));
++  window.location.assign(url.href);
++}
++
++let exchange: { state: string; token: string | null; promise: Promise<{ returnTo: string }> } | undefined;
++
++export function completeNotionConnection(query: string): Promise<{ returnTo: string }> {
++  const params = new URLSearchParams(query);
++  if (params.has('error')) {
++    sessionStorage.removeItem(PENDING_KEY);
++    return Promise.reject(new Error('Notion 연결 승인이 취소됐어요. 설정에서 다시 연결할 수 있어요.'));
++  }
++  const code = params.get('code');
++  const state = params.get('state');
++  const token = getAccessToken();
++  // Share the exchange across StrictMode effect replays; never retry a used state.
++  if (state && exchange?.state === state && exchange.token === token) return exchange.promise;
++  try {
++    const headers = authorization();
++    const saved = JSON.parse(sessionStorage.getItem(PENDING_KEY) || 'null');
++    if (!code || !state || saved?.state !== state) {
++      throw new Error('Notion 연결 요청을 확인하지 못했습니다. 같은 창에서 연결을 다시 시작해 주세요.');
++    }
++    const returnTo = notionReturnPath(typeof saved.returnTo === 'string' ? saved.returnTo : undefined);
++    const promise = apiRequest<unknown>('/api/integrations/notion/exchange', {
++      method: 'POST', headers, body: JSON.stringify({ code, state }),
++      cache: 'no-store', signal: AbortSignal.timeout(30000),
++    }).then(data => {
++      if (!connection(data).connected) throw new Error('Notion 연결을 완료하지 못했습니다.');
++      return { returnTo };
++    }).finally(() => sessionStorage.removeItem(PENDING_KEY));
++    exchange = { state, token, promise };
++    return promise;
++  } catch (error) {
++    return Promise.reject(error);
++  }
++}
+diff --git a/src/components/NotionConnection.tsx b/src/components/NotionConnection.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/components/NotionConnection.tsx
+@@ -0,0 +1,44 @@
++import { useEffect, useRef, useState } from 'react';
++import { getNotionConnection, startNotionConnection, type NotionConnection as Connection } from '../api/notion';
++import form from './form.module.css';
++import ui from './ui.module.css';
++
++export function NotionConnection() {
++  const [connection, setConnection] = useState<Connection | null>(null);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState('');
++  const [pending, setPending] = useState(false);
++  const busy = useRef(false);
++
++  useEffect(() => {
++    const controller = new AbortController();
++    getNotionConnection(controller.signal).then(setConnection).catch(cause => {
++      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '연결 상태를 확인하지 못했어요.');
++    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
++    return () => controller.abort();
++  }, []);
++
++  async function connect() {
++    if (busy.current) return;
++    busy.current = true;
++    setPending(true);
++    setError('');
++    try {
++      await startNotionConnection('/settings#notion-account');
++    } catch (cause) {
++      setError(cause instanceof Error ? cause.message : 'Notion 연결을 시작하지 못했어요.');
++      busy.current = false;
++      setPending(false);
++    }
++  }
++
++  return <div id="notion-account" style={{ marginBlock: 16 }}>
++    <p role="status">{loading ? 'Notion 연결 확인 중…' : connection?.connected
++      ? `${connection.workspace_name || 'Notion'} 계정이 연결되어 있어요. 아래에 승인한 페이지 URL을 저장해 주세요.`
++      : 'Notion 계정을 연결하고 읽을 페이지를 승인한 뒤, 아래에 페이지 URL을 저장해 주세요.'}</p>
++    <button type="button" className={ui.secondaryButton} disabled={loading || pending} onClick={() => void connect()}>
++      {pending ? '승인 화면으로 이동 중…' : connection?.connected ? 'Notion 페이지 권한 다시 연결' : 'Notion 계정 연결'}
++    </button>
++    {error && <p className={form.error} role="alert">{error}</p>}
++  </div>;
++}
+diff --git a/src/pages/NotionCallbackPage.tsx b/src/pages/NotionCallbackPage.tsx
+new file mode 100644
+--- /dev/null
++++ b/src/pages/NotionCallbackPage.tsx
+@@ -0,0 +1,32 @@
++import { useEffect, useState } from 'react';
++import { Link, useNavigate } from 'react-router';
++import { completeNotionConnection } from '../api/notion';
++import { AuthShell } from '../components/AuthUI';
++import { useDocumentTitle } from '../components/ui';
++import styles from './LoginPage.module.css';
++
++export function NotionCallbackPage() {
++  useDocumentTitle('Notion 연결');
++  const navigate = useNavigate();
++  const [query] = useState(() => window.location.search);
++  const [error, setError] = useState('');
++
++  useEffect(() => {
++    let active = true;
++    window.history.replaceState(null, '', window.location.pathname);
++    completeNotionConnection(query).then(({ returnTo }) => {
++      if (active) navigate(returnTo, { replace: true });
++    }).catch(cause => {
++      if (active) setError(cause instanceof Error ? cause.message : 'Notion 연결을 완료하지 못했어요.');
++    });
++    return () => { active = false; };
++  }, [query, navigate]);
++
++  return <AuthShell><section className={styles.card}>
++    <h1>Notion 연결</h1>
++    {error ? <>
++      <p className={styles.error} role="alert">{error}</p>
++      <Link className={styles.primaryLink} to="/settings#notion-account">설정으로 돌아가기</Link>
++    </> : <p role="status">승인한 페이지를 연결하고 있어요…</p>}
++  </section></AuthShell>;
++}
+diff --git a/tests/notion-oauth.test.mjs b/tests/notion-oauth.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/tests/notion-oauth.test.mjs
+@@ -0,0 +1,140 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { readFile } from 'node:fs/promises';
++import ts from 'typescript';
++
++const moduleUrl = source => 'data:text/javascript;base64,' + Buffer.from(ts.transpileModule(source, {
++  compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
++}).outputText).toString('base64');
++let sequence = 0;
++
++async function fixture(t, handler) {
++  const saved = { fetch: globalThis.fetch, window: globalThis.window,
++    storage: globalThis.sessionStorage, token: globalThis.notionTestToken };
++  const storage = new Map();
++  const redirects = [];
++  const calls = [];
++  globalThis.notionTestToken = 'moeum-login';
++  globalThis.window = { location: { origin: 'http://127.0.0.1:5173', assign: url => redirects.push(url) } };
++  globalThis.sessionStorage = {
++    getItem: key => storage.get(key) ?? null,
++    setItem: (key, value) => storage.set(key, value),
++    removeItem: key => storage.delete(key),
++  };
++  globalThis.fetch = async (url, options) => {
++    calls.push({ url, options });
++    assert.equal(new Headers(options.headers).get('Authorization'), 'Bearer moeum-login');
++    assert.equal(options.cache, 'no-store');
++    return handler(url, options);
++  };
++  t.after(() => {
++    globalThis.fetch = saved.fetch;
++    globalThis.window = saved.window;
++    globalThis.sessionStorage = saved.storage;
++    globalThis.notionTestToken = saved.token;
++  });
++  const client = moduleUrl((await readFile(new URL('../src/api/client.ts', import.meta.url), 'utf8'))
++    .replaceAll('import.meta.env.DEV', 'true'));
++  const auth = moduleUrl('export const getAccessToken = () => globalThis.notionTestToken;');
++  const source = (await readFile(new URL('../src/api/notion.ts', import.meta.url), 'utf8'))
++    .replace("'./client'", JSON.stringify(client)).replace("'./auth'", JSON.stringify(auth));
++  const api = await import(moduleUrl(source + `\n// instance ${++sequence}`));
++  return { api, storage, redirects, calls };
++}
++
++const state = 'a'.repeat(43);
++const status = { connected: true, workspace_id: 'workspace', workspace_name: 'My Notes' };
++const json = (body, code = 200) => new Response(JSON.stringify(body), { status: code });
++const authorize = (callback = 'http://127.0.0.1:5173/auth/notion/callback') => ({
++  authorization_url: 'https://api.notion.com/v1/oauth/authorize?' + new URLSearchParams({
++    state, redirect_uri: callback, owner: 'user', response_type: 'code', client_id: 'client',
++  }),
++});
++
++test('approval starts with login authentication and retains a safe return path', async t => {
++  const { api, storage, redirects } = await fixture(t, (url, options) => {
++    assert.equal(url, '/backend/api/integrations/notion/authorize');
++    assert.equal(options.method, 'POST');
++    return json(authorize());
++  });
++  await api.startNotionConnection('/dashboard');
++  assert.equal(redirects.length, 1);
++  assert.equal(new URL(redirects[0]).hostname, 'api.notion.com');
++  assert.deepEqual(JSON.parse(storage.get('moeum.notion.pending')), { state, returnTo: '/dashboard' });
++  assert.ok(!JSON.stringify([...storage]).includes('moeum-login'));
++});
++
++test('missing login does not start an authorization request', async t => {
++  const { api, calls } = await fixture(t, () => { throw new Error('must not request'); });
++  globalThis.notionTestToken = null;
++  await assert.rejects(api.startNotionConnection(), /로그인/);
++  assert.equal(calls.length, 0);
++});
++
++test('another callback origin is rejected before navigation and pending storage', async t => {
++  const { api, redirects, storage } = await fixture(t, () => json(authorize('http://localhost:5173/auth/notion/callback')));
++  await assert.rejects(api.startNotionConnection(), /콜백 주소/);
++  assert.equal(redirects.length, 0);
++  assert.equal(storage.size, 0);
++});
++
++test('an untrusted authorization host is rejected', async t => {
++  const { api, redirects } = await fixture(t, () => json({ authorization_url: 'https://evil.example/v1/oauth/authorize' }));
++  await assert.rejects(api.startNotionConnection(), /승인 주소/);
++  assert.equal(redirects.length, 0);
++});
++
++test('StrictMode exchanges a callback only once, then clears pending state', async t => {
++  const { api, storage, calls } = await fixture(t, (url, options) => {
++    assert.equal(url, '/backend/api/integrations/notion/exchange');
++    assert.deepEqual(JSON.parse(options.body), { code: 'one-use-code', state });
++    return json(status);
++  });
++  storage.set('moeum.notion.pending', JSON.stringify({ state, returnTo: '/settings#notion-account' }));
++  const query = '?' + new URLSearchParams({ code: 'one-use-code', state });
++  const first = api.completeNotionConnection(query);
++  assert.equal(first, api.completeNotionConnection(query));
++  assert.deepEqual(await first, { returnTo: '/settings#notion-account' });
++  assert.equal(calls.length, 1);
++  assert.equal(storage.size, 0);
++});
++
++test('mismatched callback state is blocked before sending the code', async t => {
++  const { api, storage, calls } = await fixture(t, () => { throw new Error('must not request'); });
++  storage.set('moeum.notion.pending', JSON.stringify({ state: 'different' }));
++  await assert.rejects(api.completeNotionConnection(`?code=code&state=${state}`), /연결 요청/);
++  assert.equal(calls.length, 0);
++});
++
++test('user cancellation clears pending state without exchanging a code', async t => {
++  const { api, storage, calls } = await fixture(t, () => { throw new Error('must not request'); });
++  storage.set('moeum.notion.pending', JSON.stringify({ state }));
++  await assert.rejects(api.completeNotionConnection('?error=access_denied'), /취소/);
++  assert.equal(calls.length, 0);
++  assert.equal(storage.size, 0);
++});
++
++test('failed code exchange is not retried with an already consumed state', async t => {
++  const { api, storage, calls } = await fixture(t, () => json({ detail: '연결 승인부터 다시 진행해 주세요.' }, 502));
++  storage.set('moeum.notion.pending', JSON.stringify({ state }));
++  const query = `?code=code&state=${state}`;
++  await assert.rejects(api.completeNotionConnection(query), /다시 진행/);
++  await assert.rejects(api.completeNotionConnection(query), /다시 진행/);
++  assert.equal(calls.length, 1);
++  assert.equal(storage.size, 0);
++});
++
++test('external return destinations cannot redirect a successful connection off-site', async t => {
++  const { api, storage } = await fixture(t, () => json(status));
++  storage.set('moeum.notion.pending', JSON.stringify({ state, returnTo: 'https://evil.example/' }));
++  assert.deepEqual(await api.completeNotionConnection(`?code=code&state=${state}`), { returnTo: '/settings#notion-account' });
++});
++
++test('connection status reads metadata without persisting a Notion token', async t => {
++  const { api, storage } = await fixture(t, url => {
++    assert.equal(url, '/backend/api/integrations/notion');
++    return json(status);
++  });
++  assert.deepEqual(await api.getNotionConnection(), status);
++  assert.equal(storage.size, 0);
++});

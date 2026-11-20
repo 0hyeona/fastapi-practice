@@ -1,5 +1,5 @@
 from app.routers import project_sync_runs
-from app.routers import project_github, project_integrations, project_connections
+from app.routers import project_github, project_integrations, project_connections, notion_oauth
 import os
 
 from fastapi import FastAPI
@@ -20,6 +20,7 @@ app.add_middleware(
 app.include_router(projects.router)
 app.include_router(project_github.router)
 app.include_router(project_integrations.router)
+app.include_router(notion_oauth.router)
 app.include_router(project_connections.router)
 app.include_router(project_sync_runs.router)
 app.include_router(stories.router)

@@ -32,8 +32,8 @@ def figma_sync_status(project=Depends(owned_project), db: Session = Depends(get_
 
 
 @router.get('/{project_id}/integrations', response_model=dict[str, ConnectionState], summary='Figma·Notion 연결 설정 확인')
-def integrations(project=Depends(owned_project)):
-    return {source: connection_state(project, source) for source in ('figma', 'notion')}
+def integrations(project=Depends(owned_project), db: Session = Depends(get_db)):
+    return {source: connection_state(project, source, db) for source in ('figma', 'notion')}
 
 
 @router.post('/{project_id}/figma/sync', response_model=ExternalSyncResult, summary='Figma 버전 변경사항 수집',

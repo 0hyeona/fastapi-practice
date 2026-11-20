@@ -15,9 +15,9 @@ def rich_text(parts):
     return ''.join(part['plain_text'] if 'plain_text' in part else part['text']['content'] for part in parts)
 
 
-def collect(project, api):
+def collect(project, api, db=None):
     resource = api.resource_id('notion', project.notion_url)
-    token = api.scoped_token('notion', project.owner_id, resource)
+    token = api.scoped_token('notion', project.owner_id, resource, db)
     headers = {'Authorization': f'Bearer {token}', 'Notion-Version': '2026-03-11'}
     endpoint = f'https://api.notion.com/v1/pages/{resource}'
     blocks = {}
@@ -107,7 +107,7 @@ def sync(db, project, progress, api):
     locked = db.scalar(select(Project).where(Project.id == project.id).with_for_update().execution_options(populate_existing=True))
     if locked is None or locked.owner_id != original_owner or locked.notion_url != original_url:
         raise HTTPException(409, 'Project connection changed; retry.')
-    resource, current, timestamp = collect(locked, api)
+    resource, current, timestamp = collect(locked, api, db)
     progress['fetched'] = 1
     snapshot = db.scalar(select(ProjectNotionSnapshot).where(
         ProjectNotionSnapshot.project_id == project.id,

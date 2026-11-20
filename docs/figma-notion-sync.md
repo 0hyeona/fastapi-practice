@@ -2,7 +2,9 @@
 
 기존 project_activities 테이블을 사용하므로 추가 DB 테이블/마이그레이션은 필요 없습니다.
 토큰은 서버 .env 또는 배포 환경 변수에만 입력합니다. API 응답/프로젝트 필드에 저장하지 않습니다.
-현재 방식은 관리자 설정의 한 사용자별 서버 토큰입니다. 사용자별 OAuth 연결 UI는 포함하지 않습니다.
+Notion은 사용자별 OAuth 연결을 우선 사용합니다. 설정 및 프론트 연동 계약은
+[notion-user-oauth.md](notion-user-oauth.md)를 참고하세요.
+아래 서버 토큰 방식은 기존 사용자 호환용입니다. Notion OAuth 연결 UI는 프론트에서 추가해야 합니다.
 
 ## 1. 인증 설정
 
@@ -20,6 +22,8 @@ NOTION_ALLOWED_PAGE_IDS=Notion_페이지_ID
 OWNER_ID는 프로젝트 ID가 아니라 users.id입니다. 여러 파일/페이지 ID는 쉼표로 구분합니다.
 Figma 파일키는 https://www.figma.com/design/FILE_KEY/이름 에서 FILE_KEY입니다.
 Notion 페이지 ID는 페이지 링크 끝의 32자리 UUID이며 하이픈 포함/미포함 모두 허용합니다.
+NOTION_ALLOWED_PAGE_IDS에는 Notion 페이지 URL 전체를 넣어도 페이지 ID를 추출해 검사합니다.
+허용 목록에 상위 페이지를 넣어도 다른 하위 페이지까지 자동 허용하지는 않습니다.
 프로젝트 URL을 임의로 바꾸어 서버 토큰으로 다른 사용자의 자료를 읽지 못하도록 소유자와 허용 리소스를 함께 검사합니다.
 
 - Figma 개인 액세스 토큰: file_content:read, file_versions:read 권한 필요. 해당 파일에 접근 가능한 계정에서 발급.
@@ -75,6 +79,14 @@ Figma는 파일키와 버전 ID로 중복을 방지합니다. 현재 버전이 �
 - 503: 환경 변수 누락 또는 외부 요청 한도 초과 (Retry-After가 있으면 대기 후 재시도)
 - 502: 외부 토큰 권한/응답/네트워크 오류
 - 504: 외부 요청 시간 초과
+
+### Notion 설정 오류 구분
+
+- `NOTION_TOKEN_OWNER_ID가 프로젝트 소유자와 일치하지 않습니다`: 해당 프로젝트의 `projects.owner_id`와 서버 설정을 비교하세요. 이 값은 MOEUM의 `users.id`이며 Notion 계정 ID가 아닙니다. 현재 서버 토큰은 소유자 한 명에게만 허용됩니다.
+- `프로젝트의 Notion 페이지가 NOTION_ALLOWED_PAGE_IDS에 없습니다`: 프로젝트에 저장한 `notion_url`의 페이지 ID 또는 해당 URL을 허용 목록에 추가하세요. 기존 허용 페이지가 필요하면 쉼표로 추가합니다.
+- `NOTION_ALLOWED_PAGE_IDS에 올바른 페이지 ID 또는 Notion 페이지 URL을 ...`: 잘못된 항목이 있으면 안전을 위해 수집을 차단합니다. 페이지 ID/URL 형식을 수정하세요.
+
+이 검사는 Notion API 요청 전에 실행됩니다. 설정을 수정한 후 로컬 서버를 재시작하거나 Render 환경 변수 변경을 배포하고, `GET /api/projects/{project_id}/integrations`에서 Notion의 `configured`를 확인하세요. 이후 `POST /api/projects/{project_id}/notion/sync`로 실제 토큰과 페이지 공유 권한을 확인합니다.
 
 ## 공식 API 근거
 

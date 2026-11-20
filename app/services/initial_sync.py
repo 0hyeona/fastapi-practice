@@ -15,7 +15,7 @@ def initial_sync(project_id, owner_id, sources):
                 project = db.get(Project, project_id)
                 if project is None or project.owner_id != owner_id:
                     return
-                if not connection_state(project, source)['configured']:
+                if not connection_state(project, source, db)['configured']:
                     continue
                 sync_external(db, project, source)
         except HTTPException as error:

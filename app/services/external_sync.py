@@ -40,28 +40,49 @@ def resource_id(source, url):
         raise HTTPException(422, f"올바른 {source} 파일/페이지 링크를 입력하세요.") from None
 
 
-def scoped_token(source, owner_id, resource):
+def scoped_token(source, owner_id, resource, db=None):
+    if source == 'notion' and db is not None:
+        from app.services.notion_oauth import user_token
+        token = user_token(db, owner_id)
+        if token is not None:
+            # Notion enforces pages selected by this user during OAuth.
+            return token
+        if (not os.getenv('NOTION_TOKEN', '').strip()
+                or os.getenv('NOTION_TOKEN_OWNER_ID', '').strip() != str(owner_id)):
+            raise HTTPException(409, 'Notion 계정 연결이 필요합니다. Notion 연결 버튼에서 계정과 읽을 페이지를 승인하세요.')
     prefix = source.upper()
     token = os.getenv(f'{prefix}_TOKEN', '').strip()
     configured_owner = os.getenv(f'{prefix}_TOKEN_OWNER_ID', '').strip()
     allow_name = 'FIGMA_ALLOWED_FILE_KEYS' if source == 'figma' else 'NOTION_ALLOWED_PAGE_IDS'
     allowed = {part.strip() for part in os.getenv(allow_name, '').split(',') if part.strip()}
     if source == 'notion':
-        allowed = {part.replace('-', '').lower() for part in allowed}
+        try:
+            # Accept copied page links as well as UUIDs; never broaden the scope.
+            allowed = {
+                resource_id('notion', part) if part.startswith('https://') else UUID(part).hex
+                for part in allowed
+            }
+        except (ValueError, HTTPException):
+            raise HTTPException(503, 'NOTION_ALLOWED_PAGE_IDS에 올바른 페이지 ID 또는 Notion 페이지 URL을 쉼표로 구분해 입력하세요.') from None
     if not token or not configured_owner or not allowed:
         raise HTTPException(503, f'{prefix}_TOKEN, {prefix}_TOKEN_OWNER_ID, {allow_name} 설정이 필요합니다.')
-    if str(owner_id) != configured_owner or resource not in allowed:
+    if source == 'notion':
+        if str(owner_id) != configured_owner:
+            raise HTTPException(403, 'NOTION_TOKEN_OWNER_ID가 프로젝트 소유자와 일치하지 않습니다. Notion 계정 ID가 아닌 프로젝트 소유자의 MOEUM users.id를 설정하세요.')
+        if resource not in allowed:
+            raise HTTPException(403, '프로젝트의 Notion 페이지가 NOTION_ALLOWED_PAGE_IDS에 없습니다. 등록한 페이지 ID 또는 페이지 URL을 허용 목록에 추가하세요.')
+    elif str(owner_id) != configured_owner or resource not in allowed:
         raise HTTPException(403, f'{source} 연결이 이 사용자와 파일/페이지에 허용되지 않았습니다.')
     return token
 
 
-def connection_state(project, source):
+def connection_state(project, source, db=None):
     url = getattr(project, source + '_url')
     if not url:
         return {'linked': False, 'configured': False, 'resource_id': None, 'detail': '프로젝트 링크가 없습니다.'}
     try:
         resource = resource_id(source, url)
-        scoped_token(source, project.owner_id, resource)
+        scoped_token(source, project.owner_id, resource, db)
     except HTTPException as error:
         return {'linked': True, 'configured': False, 'resource_id': None, 'detail': error.detail}
     return {'linked': True, 'configured': True, 'resource_id': resource,

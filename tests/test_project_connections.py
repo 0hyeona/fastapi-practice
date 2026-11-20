@@ -35,7 +35,8 @@ class ConnectionsTests(unittest.TestCase):
             tasks=BackgroundTasks()
             routes.save_connection(routes.ConnectionUpdate(external_url=url),'figma',tasks,self.project,self.db)
             self.assertEqual(self.project.figma_url,url)
-            self.assertEqual(len(tasks.tasks),int(url is not None))
+            # Figma collection is manual to protect the API quota.
+            self.assertEqual(len(tasks.tasks), 0)
         with self.assertRaises(HTTPException):
             routes.save_connection(routes.ConnectionUpdate(external_url='https://evil.com/file/ABC/Test'),'figma',BackgroundTasks(),self.project,self.db)
         self.assertIsNone(self.project.figma_url)
