@@ -51,7 +51,7 @@ def describe_connection(project, source, db=None):
         return dict(result, connection_status='invalid_url', detail='파일/페이지/저장소 링크 형식을 확인하세요.')
     result['external_id'] = identifier
     if source == 'github':
-        authenticated = 'Authorization' in GitHubClient(identifier, project.owner_id).headers
+        authenticated = 'Authorization' in GitHubClient(identifier, project.owner_id, db).headers
         return dict(result, connection_status='configured' if authenticated else 'public_access_unverified',
                     detail='실제 접근 여부는 동기화 시 확인합니다.' if authenticated else '공개 저장소 조회 모드입니다. 비공개 저장소는 인증 설정이 필요합니다.')
     try:

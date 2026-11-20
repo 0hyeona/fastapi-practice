@@ -65,6 +65,7 @@ def github_login(request: Request):
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "scope": "read:user user:email",
+        "prompt": "select_account",
         "state": state,
     })
     response = RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
@@ -89,10 +90,10 @@ async def github_callback(request: Request, code: str | None = None,
             raise HTTPException(400, "GitHub 로그인이 취소되었거나 승인되지 않았습니다.")
         if not code:
             raise HTTPException(400, "GitHub 인증 코드가 없습니다.")
-        user = await fetch_github_user(code)
+        user, github_token = await fetch_github_user(code)
         # 명시적으로 설정한 로컬 테스트에서만 이메일 중복을 우회합니다.
         test_email = os.getenv("GITHUB_TEST_EMAIL") if request.url.hostname in {"localhost", "127.0.0.1"} else None
-        session = github_login_session(db, user, test_email=test_email)
+        session = github_login_session(db, user, github_token, test_email=test_email)
         response = github_completion_response({"login_code": create_handoff(db, session)})
     except InvalidCredentialsError as exc:
         response = github_completion_response({"detail": str(exc)}, status_code=403)

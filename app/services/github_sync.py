@@ -10,7 +10,7 @@ from app.services.project_github import GitHubClient, repository_name
 
 def _sync_commits(db, project, branch, page, per_page, progress):
     repository = repository_name(project.github_url)
-    github = GitHubClient(repository, project.owner_id)
+    github = GitHubClient(repository, project.owner_id, db)
     params = {"page": page, "per_page": per_page}
     if branch:
         params["sha"] = branch

@@ -30,9 +30,10 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
         ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
--- GitHub 숫자 ID로 회원 연결: GitHub 토큰은 저장하지 않습니다.
+-- GitHub 숫자 ID와 사용자별 암호화된 OAuth 토큰
 CREATE TABLE IF NOT EXISTS github_accounts (
     github_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+    token_ciphertext TEXT NULL,
     user_id BIGINT UNSIGNED NOT NULL UNIQUE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;

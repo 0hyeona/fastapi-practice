@@ -63,6 +63,39 @@ class ProjectAccessTests(unittest.TestCase):
         self.assertFalse(project_service.delete_project(self.db, self.project.id, self.member.id))
         self.assertEqual(self.story.title, 'Shared')
 
+    def test_shared_github_reads_use_owner_encrypted_credentials(self):
+        import os
+        from cryptography.fernet import Fernet
+        from app.models.github_account import GithubAccount
+        from app.services.project_github import GitHubClient
+        from test_project_github import REPO
+
+        self.add()
+        self.project.github_url = 'https://github.com/acme/demo'
+        key = Fernet.generate_key()
+        cipher = Fernet(key)
+        for github_id, user_id, token in [
+            (101, self.project.owner_id, 'owner-token'),
+            (102, self.member.id, 'member-token'),
+        ]:
+            self.db.add(GithubAccount(github_id=github_id, user_id=user_id,
+                                     token_ciphertext=cipher.encrypt(token.encode()).decode()))
+        self.db.commit()
+        project = project_github.accessible_project(self.project.id, self.db, self.member)
+        with patch.dict(os.environ, {'GITHUB_CREDENTIAL_ENCRYPTION_KEY': key.decode()}):
+            client = project_github.github_client(project, self.db)
+            self.assertEqual(client.headers['Authorization'], 'Bearer owner-token')
+
+            seen_headers = []
+            def get(client, *args, **kwargs):
+                seen_headers.append(client.headers['Authorization'])
+                return (REPO, False) if len(seen_headers) == 1 else ([], False)
+
+            with patch.object(GitHubClient, 'get', get):
+                result = project_github.dashboard(project, self.db)
+            self.assertEqual(result['github']['full_name'], 'acme/demo')
+            self.assertEqual(seen_headers, ['Bearer owner-token', 'Bearer owner-token'])
+
     def test_revocation_removes_all_read_and_sync_access(self):
         self.add()
         project_members.remove_member(self.member.id, self.project, self.db)
