@@ -28,8 +28,8 @@ def owned_project(project_id: int = Path(gt=0), db: Session = Depends(get_db), u
     return project
 
 
-def github_client(project=Depends(owned_project)):
-    return GitHubClient(repository_name(project.github_url), project.owner_id)
+def github_client(project=Depends(owned_project), db: Session = Depends(get_db)):
+    return GitHubClient(repository_name(project.github_url), project.owner_id, db)
 
 
 @router.get("/{project_id}/dashboard", response_model=Dashboard, summary="대시보드 요약")
@@ -47,7 +47,7 @@ def dashboard(project=Depends(owned_project), db: Session = Depends(get_db)):
     if not project.github_url:
         return result
     try:
-        github = GitHubClient(repository_name(project.github_url), project.owner_id)
+        github = GitHubClient(repository_name(project.github_url), project.owner_id, db)
         repo, _ = github.get()
         commits, _ = github.get("/commits", {"per_page": 5, "page": 1}, empty_list=True)
         result.update(github={

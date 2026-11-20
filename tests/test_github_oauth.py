@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+from cryptography.fernet import Fernet
 import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
@@ -24,6 +25,7 @@ from app.services.auth_service import hash_token
 class GithubOAuthTests(unittest.TestCase):
     def setUp(self):
         self.environment = patch.dict(os.environ, {
+            "GITHUB_CREDENTIAL_ENCRYPTION_KEY": Fernet.generate_key().decode(),
             "GITHUB_CLIENT_ID": "test-client", "GITHUB_CLIENT_SECRET": "test-secret",
             "GITHUB_REDIRECT_URI": "http://localhost:8000/api/auth/github/callback",
             "GITHUB_TEST_EMAIL": "",
@@ -115,6 +117,26 @@ class GithubOAuthTests(unittest.TestCase):
         self.assertEqual(self.calls[1].headers["authorization"], "Bearer private-token")
         self.assertNotIn("github_oauth_state", self.client.cookies)
         self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_visitors_use_only_their_own_repository_credentials(self):
+        from app.services.project_github import GitHubClient
+        first = self.callback().json()["user"]["id"]
+        self.profile.update(id=456, login="visitor2")
+        self.emails[0]["email"] = "visitor2@example.com"
+        self.token_body = {"access_token": "second-private-token"}
+        second = self.callback().json()["user"]["id"]
+        self.assertNotEqual(first, second)
+        with Session(self.engine) as db:
+            for owner, token in [(first, "private-token"), (second, "second-private-token")]:
+                github = GitHubClient("public/demo", owner, db)
+                self.assertEqual(github.headers["Authorization"], "Bearer " + token)
+                stored = db.scalar(select(GithubAccount.token_ciphertext).where(GithubAccount.user_id == owner))
+                self.assertNotIn(token, stored)
+        self.token_body = {"access_token": "replacement"}
+        self.assertEqual(self.callback().json()["user"]["id"], second)
+        with Session(self.engine) as db:
+            self.assertEqual(GitHubClient("public/demo", second, db).headers["Authorization"], "Bearer replacement")
+            self.assertEqual(GitHubClient("public/demo", first, db).headers["Authorization"], "Bearer private-token")
 
     def test_untrusted_callback_never_contacts_github(self):
         response = self.client.get("/api/auth/github/callback?code=x", follow_redirects=False)

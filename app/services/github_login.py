@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.services.github_credentials import cipher
 from app.models.github_account import GithubAccount
 from app.models.user import User
 from app.schemas.auth import LoginResponse
@@ -19,8 +20,9 @@ def find_github_member(db: Session, github_id: int) -> User | None:
                      .where(GithubAccount.github_id == github_id))
 
 
-def github_login_session(db: Session, profile: dict, test_email: str | None = None) -> LoginResponse:
+def github_login_session(db: Session, profile: dict, github_token: str, test_email: str | None = None) -> LoginResponse:
     github_id = profile["id"]
+    encrypted = cipher().encrypt(github_token.encode()).decode()
     try:
         user = find_github_member(db, github_id)
         if user is None:
@@ -51,12 +53,14 @@ def github_login_session(db: Session, profile: dict, test_email: str | None = No
             db.flush()
             db.add(GithubAccount(github_id=github_id, user_id=user.id))
             db.flush()
+        db.get(GithubAccount, github_id).token_ciphertext = encrypted
         return create_login_session(db, user)
     except IntegrityError as exc:
         db.rollback()
         # 동시에 같은 GitHub 계정이 가입한 경우 먼저 저장된 회원으로 로그인합니다.
         user = find_github_member(db, github_id)
         if user is not None:
+            db.get(GithubAccount, github_id).token_ciphertext = encrypted
             return create_login_session(db, user)
         raise HTTPException(409, "회원 정보가 이미 사용 중입니다. 기존 계정으로 로그인하세요.") from exc
     except Exception:

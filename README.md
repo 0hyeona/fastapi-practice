@@ -24,10 +24,23 @@ Copy-Item .env.example .env
 기존 DB에는 한 번 `python -m scripts.setup_github_db`를 실행하여 GitHub 회원 연결
 테이블을 추가합니다. 새 DB에는 `sql/schema.sql`을 사용합니다.
 
+기존 TiDB에는 배포 전에 `sql/github_user_oauth.sql`을 한 번 실행합니다.
+Render의 `GITHUB_CREDENTIAL_ENCRYPTION_KEY`에는 아래 명령이 출력하는 값을 저장하고
+이후 배포에도 같은 키를 유지합니다.
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+GitHub로 로그인한 방문자는 본인 프로젝트에 공개 저장소 주소를 등록할 수 있습니다.
+대시보드 조회와 동기화는 프로젝트 소유자의 OAuth 토큰을 사용합니다.
+기존 방문자도 배포 후 한 번 GitHub로 다시 로그인하면 연결됩니다.
+공용 전시 기기에서는 방문자마다 새 시크릿 창을 열고 체험이 끝나면 모든 시크릿 창을 닫습니다.
+
 1. 브라우저에서 `http://localhost:8000/api/auth/github/login`을 엽니다.
 2. GitHub에 로그인하고 권한에 동의합니다.
 3. callback 성공 응답의 `access_token`은 **우리 서비스 로그인 토큰**이며,
-   `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 반환하거나 저장하지 않습니다.
+   `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 서버가 암호화하여 해당 회원의 github_accounts 행에 보관합니다.
 4. Swagger의 **Authorize**에 이 토큰만 입력하면 `/api/auth/me`, 프로젝트 API,
    `/api/auth/logout`을 기존 로그인과 동일하게 사용할 수 있습니다.
 ****

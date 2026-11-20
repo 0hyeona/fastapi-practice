@@ -7,7 +7,7 @@ import httpx
 from fastapi import HTTPException
 
 
-async def fetch_github_user(code: str) -> dict:
+async def fetch_github_user(code: str) -> tuple[dict, str]:
     client_id = os.getenv("GITHUB_CLIENT_ID")
     client_secret = os.getenv("GITHUB_CLIENT_SECRET")
     redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
@@ -65,4 +65,4 @@ async def fetch_github_user(code: str) -> dict:
         raise HTTPException(502, "GitHub 인증 또는 사용자 정보 조회에 실패했습니다. 다시 로그인하세요.") from exc
 
     # 토큰은 GitHub 요청에만 사용하고 브라우저 응답에는 포함하지 않습니다.
-    return {key: user.get(key) for key in ("id", "login", "name", "email", "avatar_url", "html_url")}
+    return {key: user.get(key) for key in ("id", "login", "name", "email", "avatar_url", "html_url")}, token

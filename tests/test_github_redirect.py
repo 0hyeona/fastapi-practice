@@ -33,7 +33,7 @@ class GithubRedirectTests(unittest.TestCase):
 
     def test_success_matches_frontend_fragment_contract(self):
         async def profile(code):
-            return {"id": 123, "login": "test"}
+            return {"id": 123, "login": "test"}, "test-token"
         session = LoginResponse(access_token="app-session", expires_in=3600, user={
             "id": 1, "user_id": "test", "name": "Test", "email": "test@example.com",
             "account_status": "active", "created_at": "2026-10-27T00:00:00"})
