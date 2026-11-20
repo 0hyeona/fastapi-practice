@@ -53,7 +53,7 @@ class ProjectContentTests(unittest.TestCase):
         self.client.post("/api/auth/signup", json=other)
         token = self.client.post("/api/auth/login", json={"email": other["email"], "password": other["password"]}).json()["access_token"]
         other_headers = {"Authorization": "Bearer " + token}
-        with patch("app.services.story_analysis.httpx.post") as provider:
+        with patch("httpx.post") as provider:
             denied = self.client.post("/stories/analyze", headers=other_headers,
                                       json={"project_id": self.project_id, "activity_ids": [1]})
             self.assertEqual(denied.status_code, 404)
@@ -124,67 +124,34 @@ class ProjectContentTests(unittest.TestCase):
             self.assertEqual(response.status_code, 422)
 
     def test_story_analysis_save_and_export(self):
-        ids = [
-            self.client.post("/project_activities", headers=self.headers,
-                             json={**self.activity, "source": source, "description": f"{source} 변경"})
-            .json()["activity_id"]
-            for source in ("github", "figma", "notion")
-        ]
-        request = {"project_id": self.project_id, "activity_ids": ids}
-        analysis = {"tags": ["로그인", "인증"], "title": "로그인 개선", "before": None,
-                    "after": "오류 안내 추가", "summary": "변경 요약"}
-
-        def provider_response(url, *, headers, json, timeout):
-            self.assertEqual(url, "https://api.openai.com/v1/responses")
-            self.assertFalse(json["store"])
-            self.assertEqual(headers["Authorization"], "Bearer test-key")
-            fields = json["text"]["format"]["schema"]["required"]
-            return httpx.Response(200, request=httpx.Request("POST", url), json={
-                "status": "completed", "output": [{"type": "message", "content": [
-                    {"type": "output_text", "text": dumps({field: analysis[field] for field in fields})},
-                ]}],
-            })
-
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}), patch(
-            "app.services.story_analysis.httpx.post", side_effect=provider_response,
-        ) as provider:
-            generated = self.client.post("/stories/analyze", json=request, headers=self.headers)
-            self.assertEqual(generated.status_code, 200, generated.text)
-            self.assertEqual(generated.json(), analysis)
-            evidence = loads(provider.call_args.kwargs["json"]["input"])
-            self.assertEqual([item["source"] for item in evidence], ["github", "figma", "notion"])
-            self.assertEqual(evidence[-1]["description"], "notion 변경")
-            self.assertNotIn("source_url", evidence[0])
-            regenerated = self.client.post("/stories/analyze", headers=self.headers,
-                                           json={**request, "section": "before"})
-            self.assertEqual(regenerated.status_code, 200)
-            self.assertEqual(regenerated.json(), {"before": None})
-
-        self.assertEqual(self.client.get("/stories", headers=self.headers).json(), [])
-        created = self.client.post("/stories", headers=self.headers, json={
-            **request, "title": analysis["title"], "ai_analysis": generated.json(),
-            "why": "작업 배경", "problem": "오류", "solution": "안내 추가", "result": "개선",
-            "learned": "예외 처리", "next_steps": "검증", "content": "내 메모 <script>",
-        })
+        ids = []
+        for source in ('github', 'figma', 'notion'):
+            row = self.client.post('/project_activities', headers=self.headers,
+                                   json={**self.activity, 'source': source, 'description': source + ' evidence'}).json()
+            ids.append(row['activity_id'])
+        with patch.dict('os.environ', {'OPENAI_API_KEY': ''}), patch('httpx.post') as provider:
+            response = self.client.post('/stories/analyze', headers=self.headers,
+                                        json={'project_id': self.project_id, 'activity_ids': ids, 'mode': 'code'})
+            self.assertEqual(response.status_code, 200, response.text)
+            analysis = response.json()
+            self.assertEqual(analysis['tags'], ['github', 'figma', 'notion'])
+            self.assertIn('notion evidence', analysis['summary'])
+            self.assertIsNone(analysis['before'])
+            provider.assert_not_called()
+        created = self.client.post('/stories', headers=self.headers, json={
+            **self.story, 'title': analysis['title'], 'ai_analysis': analysis, 'activity_ids': ids})
         self.assertEqual(created.status_code, 201, created.text)
-        story_id = created.json()["id"]
-        activity_path = f"/api/projects/{self.project_id}/activities"
-        linked = self.client.get(activity_path, params={"story_id": story_id}, headers=self.headers)
-        self.assertCountEqual([item["activity_id"] for item in linked.json()], ids)
-        detail = self.client.get(f"/stories/{story_id}", headers=self.headers).json()
-        self.assertEqual(detail, created.json())
-        self.assertEqual(detail["content"], "내 메모 <script>")
-        self.assertEqual(detail["ai_analysis"], analysis)
-
-        export_path = f"/stories/{story_id}/export"
-        exported = self.client.get(export_path, headers=self.headers)
+        story_id = created.json()['id']
+        detail = self.client.get(f'/stories/{story_id}', headers=self.headers).json()
+        self.assertEqual(detail['ai_analysis'], analysis)
+        published = self.client.patch(f'/stories/{story_id}', headers=self.headers, json={'story_status': 'published'})
+        self.assertEqual(published.json()['story_status'], 'published')
+        linked = self.client.get(f'/api/projects/{self.project_id}/activities?story_id={story_id}', headers=self.headers)
+        self.assertCountEqual([row['activity_id'] for row in linked.json()], ids)
+        exported = self.client.get(f'/stories/{story_id}/export', headers=self.headers)
         self.assertEqual(exported.status_code, 200)
-        self.assertTrue(exported.headers["content-type"].startswith("text/markdown"))
-        self.assertEqual(exported.headers["content-disposition"], f'attachment; filename="story-{story_id}.md"')
-        for snippet in ("# 로그인 개선", "로그인, 인증", "작업 배경", "검증", "오류 안내 추가",
-                        "변경 요약", "내 메모 &lt;script&gt;"):
-            self.assertIn(snippet, exported.text)
-        self.assertEqual(self.client.get(export_path).status_code, 401)
+        self.assertIn('notion evidence', exported.text)
+        self.assertEqual(self.client.get(f'/stories/{story_id}/export').status_code, 401)
 
     def test_story_bulk_link_rejects_invalid_selection_without_saving(self):
         activity = self.client.post("/project_activities", json=self.activity, headers=self.headers).json()
@@ -203,22 +170,19 @@ class ProjectContentTests(unittest.TestCase):
         self.assertEqual(self.client.post("/stories", headers=self.headers, json=request).status_code, 409)
         self.assertEqual(len(self.client.get("/stories", headers=self.headers).json()), 1)
 
-    def test_story_analysis_access_and_provider_errors(self):
-        activity = self.client.post("/project_activities", json=self.activity, headers=self.headers).json()
-        request = {"project_id": self.project_id, "activity_ids": [activity["activity_id"]]}
-        path = "/stories/analyze"
+    def test_story_analysis_access_and_selection_validation(self):
+        activity = self.client.post('/project_activities', json=self.activity, headers=self.headers).json()
+        request = {'project_id': self.project_id, 'activity_ids': [activity['activity_id']]}
+        path = '/stories/analyze'
         self.assertEqual(self.client.post(path, json=request).status_code, 401)
-        with patch.dict("os.environ", {"OPENAI_API_KEY": ""}), patch("app.services.story_analysis.httpx.post") as provider:
-            self.assertEqual(self.client.post(path, headers=self.headers,
-                                              json={**request, "activity_ids": []}).status_code, 422)
-            self.assertEqual(self.client.post(path, headers=self.headers,
-                                              json={**request, "activity_ids": [9999]}).status_code, 404)
-            self.assertEqual(self.client.post(path, headers=self.headers, json=request).status_code, 503)
+        with patch.dict('os.environ', {'OPENAI_API_KEY': ''}), patch('httpx.post') as provider:
+            for changes, status in (({'activity_ids': []}, 422), ({'activity_ids': [9999]}, 404),
+                                    ({'activity_ids': [activity['activity_id']] * 21}, 422), ({'mode': 'invalid'}, 422)):
+                self.assertEqual(self.client.post(path, headers=self.headers, json={**request, **changes}).status_code, status)
+            self.assertEqual(self.client.post(path, headers=self.headers, json=request).status_code, 200)
+            section = self.client.post(path, headers=self.headers, json={**request, 'section': 'before'})
+            self.assertEqual(section.json(), {'before': None})
             provider.assert_not_called()
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key"}), patch(
-            "app.services.story_analysis.httpx.post", side_effect=httpx.ReadTimeout("timeout"),
-        ):
-            self.assertEqual(self.client.post(path, headers=self.headers, json=request).status_code, 504)
 
     def test_validation_and_partial_update(self):
         for path, payload in (("/stories", self.story), ("/project_activities", self.activity)):

@@ -64,6 +64,7 @@ class StoryAnalysisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     project_id: int = Field(gt=0)
     activity_ids: SelectedActivityIds = Field(min_length=1)
+    mode: Literal["semantic", "balanced", "code"] = "semantic"
     section: AnalysisSection | None = Field(default=None, description="재생성할 필드 (생략 시 전체 분석)")
 
 

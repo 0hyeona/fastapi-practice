@@ -15,12 +15,9 @@ router = APIRouter(prefix="/stories", tags=["stories"])
     "/analyze",
     response_model=StoryAnalysis,
     response_model_exclude_unset=True,
-    summary="선택한 변경사항 AI 분석",
-    description="선택한 변경사항의 제목과 설명을 OpenAI로 보내 Story 초안을 생성합니다.",
-    responses={404: {"description": "프로젝트 또는 변경사항을 찾을 수 없음"},
-               502: {"description": "AI 분석 응답 오류"},
-               503: {"description": "AI 분석 설정 필요"},
-               504: {"description": "AI 분석 시간 초과"}},
+    summary="선택한 변경사항 자체 분석",
+    description="저장된 작업 기록과 GitHub 변경 파일·diff를 바탕으로 Story 초안을 생성합니다. 외부 AI 키는 필요하지 않습니다.",
+    responses={404: {"description": "Project or selected activity not found"}},
 )
 def analyze_activities(
     request: StoryAnalysisRequest, db: Session = Depends(get_db), user: User = Depends(current_user),
