@@ -468,7 +468,9 @@ DB 테이블, IntelliJ 연결, 신규 API 실행 방법: [GitHub dashboard guide
 
 ### Figma / Notion integrations
 
-변경사항 수집, 서버 토큰 설정 및 Swagger 사용법: [연동 안내](docs/figma-notion-sync.md).
+변경사항 수집, 인증 설정 및 Swagger 사용법: [연동 안내](docs/figma-notion-sync.md).
+
+- Figma 사용자별 OAuth 연결·Render 환경변수·DB 준비·프론트 콜백: [figma-user-oauth.md](docs/figma-user-oauth.md)
 
 - 수집 실행 이력 및 DB 추가 방법: [project-sync-runs.md](docs/project-sync-runs.md)
 - Notion 수집 시점, 문장 수정 전후 비교 및 기록 제외 기준은 아래 **Notion 변경사항 수집 기준**을 참고하세요.

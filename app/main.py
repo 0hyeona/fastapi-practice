@@ -1,5 +1,5 @@
 from app.routers import project_sync_runs, project_members
-from app.routers import project_github, project_integrations, project_connections, notion_oauth
+from app.routers import project_github, project_integrations, project_connections, notion_oauth, figma_oauth
 import os
 
 from fastapi import FastAPI
@@ -22,6 +22,7 @@ app.include_router(project_members.router)
 app.include_router(project_github.router)
 app.include_router(project_integrations.router)
 app.include_router(notion_oauth.router)
+app.include_router(figma_oauth.router)
 app.include_router(project_connections.router)
 app.include_router(project_sync_runs.router)
 app.include_router(stories.router)

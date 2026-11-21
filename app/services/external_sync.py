@@ -41,6 +41,16 @@ def resource_id(source, url):
 
 
 def scoped_token(source, owner_id, resource, db=None):
+    if source not in ('figma', 'notion'):
+        raise HTTPException(422, '지원하지 않는 서비스입니다.')
+    if source == 'figma':
+        if db is None:
+            raise HTTPException(503, 'Figma 인증 정보를 조회할 DB 연결이 없습니다.')
+        from app.services.figma_oauth import user_token
+        token = user_token(db, owner_id)
+        if not token:
+            raise HTTPException(409, '먼저 Figma 계정을 연결하고 접근을 승인해 주세요.')
+        return token
     if source == 'notion' and db is not None:
         from app.services.notion_oauth import user_token
         token = user_token(db, owner_id)
@@ -53,7 +63,7 @@ def scoped_token(source, owner_id, resource, db=None):
     prefix = source.upper()
     token = os.getenv(f'{prefix}_TOKEN', '').strip()
     configured_owner = os.getenv(f'{prefix}_TOKEN_OWNER_ID', '').strip()
-    allow_name = 'FIGMA_ALLOWED_FILE_KEYS' if source == 'figma' else 'NOTION_ALLOWED_PAGE_IDS'
+    allow_name = 'NOTION_ALLOWED_PAGE_IDS'
     allowed = {part.strip() for part in os.getenv(allow_name, '').split(',') if part.strip()}
     if source == 'notion':
         try:
@@ -71,8 +81,6 @@ def scoped_token(source, owner_id, resource, db=None):
             raise HTTPException(403, 'NOTION_TOKEN_OWNER_ID가 프로젝트 소유자와 일치하지 않습니다. Notion 계정 ID가 아닌 프로젝트 소유자의 MOEUM users.id를 설정하세요.')
         if resource not in allowed:
             raise HTTPException(403, '프로젝트의 Notion 페이지가 NOTION_ALLOWED_PAGE_IDS에 없습니다. 등록한 페이지 ID 또는 페이지 URL을 허용 목록에 추가하세요.')
-    elif str(owner_id) != configured_owner or resource not in allowed:
-        raise HTTPException(403, f'{source} 연결이 이 사용자와 파일/페이지에 허용되지 않았습니다.')
     return token
 
 
@@ -143,8 +151,8 @@ def figma_cursor(value, resource):
 
 def collect_figma(project, cursor=None, db=None):
     resource = resource_id('figma', project.figma_url)
-    token = scoped_token('figma', project.owner_id, resource)
-    headers = {'X-Figma-Token': token}
+    token = scoped_token('figma', project.owner_id, resource, db)
+    headers = {'Authorization': f'Bearer {token}'}
     endpoint = f'https://api.figma.com/v1/files/{resource}'
     target = figma_cursor(cursor, resource) if cursor else endpoint + '/versions'
     versions = fetch_json('figma', target, headers)

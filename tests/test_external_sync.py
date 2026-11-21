@@ -7,6 +7,8 @@ from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import select, func
 from app.main import app
 from app.models.project_activity import ProjectActivity
+from app.models.figma_account import FigmaAccount
+from app.services import figma_oauth
 from app.services import external_sync as service
 from app.services.initial_sync import initial_sync, queue_initial_sync
 from app.schemas.project_activity import ProjectActivityUpdate
@@ -33,10 +35,16 @@ class IntegrationTests(unittest.TestCase):
         self.project.figma_url = 'https://www.figma.com/design/ABC123/Test'
         self.project.notion_url = 'https://www.notion.so/Notes-' + PAGE
         self.db.commit()
-        self.env = patch.dict(os.environ, {'FIGMA_SYNC_MIN_INTERVAL_SECONDS':'0', 'FIGMA_TOKEN':'test-figma-token', 'FIGMA_TOKEN_OWNER_ID':str(self.project.owner_id),
+        from cryptography.fernet import Fernet
+        self.env = patch.dict(os.environ, {'FIGMA_CREDENTIAL_ENCRYPTION_KEY': Fernet.generate_key().decode(),
+            'FIGMA_SYNC_MIN_INTERVAL_SECONDS':'0', 'FIGMA_TOKEN':'test-figma-token', 'FIGMA_TOKEN_OWNER_ID':str(self.project.owner_id),
             'FIGMA_ALLOWED_FILE_KEYS':'ABC123', 'NOTION_TOKEN':'test-notion-token',
             'NOTION_TOKEN_OWNER_ID':str(self.project.owner_id), 'NOTION_ALLOWED_PAGE_IDS':PAGE})
         self.env.start()
+        figma_oauth.store(self.db, self.project.owner_id, {
+            'user_id_string': '12345678901234567890', 'access_token': 'test-figma-token',
+            'refresh_token': 'figma-refresh-token', 'expires_in': 3600,
+        })
 
     def tearDown(self):
         self.env.stop()
@@ -79,10 +87,13 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(e.exception.status_code,409)
 
     def test_credentials_are_scoped_before_network(self):
+        self.db.delete(self.db.get(FigmaAccount, self.project.owner_id))
+        self.db.commit()
         for setting in ({'FIGMA_TOKEN':''},{'FIGMA_TOKEN_OWNER_ID':'999'},{'FIGMA_ALLOWED_FILE_KEYS':'OTHER'}):
             with patch.dict(os.environ,setting), patch.object(service,'fetch_json') as get:
-                with self.assertRaises(HTTPException):
+                with self.assertRaises(HTTPException) as error:
                     service.sync_external(self.db,self.project,'figma')
+                self.assertEqual(error.exception.status_code, 409)
                 get.assert_not_called()
                 self.assertFalse(integrations(self.project,self.db)['figma']['configured'])
         status = str(integrations(self.project,self.db))
@@ -180,7 +191,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('get',paths['/api/projects/{project_id}/integrations'])
 
     def test_initial_sync_uses_new_session_and_handles_failure(self):
-        with patch('app.services.initial_sync.SessionLocal') as factory, patch('app.services.initial_sync.sync_external') as sync, patch('app.services.notion_oauth.user_token', return_value=None):
+        with patch('app.services.initial_sync.SessionLocal') as factory, patch('app.services.initial_sync.sync_external') as sync, patch('app.services.notion_oauth.user_token', return_value=None), patch('app.services.figma_oauth.user_token', return_value='test-figma-token'):
             factory.return_value.__enter__.return_value.get.return_value=self.project
             sync.side_effect=HTTPException(503,'Unavailable')
             initial_sync(self.project.id,self.project.owner_id,('figma','notion'))
