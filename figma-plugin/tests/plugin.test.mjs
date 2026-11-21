@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { gunzipSync } from 'node:zlib';
 
 const code = await readFile(new URL('../code.js', import.meta.url), 'utf8');
 const ui = (await readFile(new URL('../ui.html', import.meta.url), 'utf8')).match(/<script>([\s\S]*)<\/script>/)[1];
@@ -60,13 +61,19 @@ function iframe() {
     return nodes.get(id);
   };
   const window = {};
-  const parent = { postMessage() {} };
+  const host = {};
+  host.parent = host;
+  const parent = { parent: host, postMessage() {} };
   let responder = async () => ({ created: 0, baseline: true, received_at: '2026-11-21T15:00:00Z' });
   const context = {
-    document: { getElementById: elements }, window, parent, Intl, Date, AbortSignal,
+    document: { getElementById: elements }, window, parent, Intl, Date, AbortSignal, Blob, Response, CompressionStream,
     setTimeout, clearTimeout,
     fetch: async (url, options) => {
-      calls.push({ url, body: JSON.parse(options.body), headers: options.headers });
+      const compressed = options.headers['Content-Type'] === 'application/gzip';
+      const body = compressed
+        ? JSON.parse(gunzipSync(new Uint8Array(await options.body.arrayBuffer())).toString('utf8'))
+        : JSON.parse(options.body);
+      calls.push({ url, body, headers: options.headers, bytes: compressed ? options.body.size : Buffer.byteLength(options.body) });
       const result = await responder(calls.at(-1));
       return { ok: true, json: async () => result };
     },
@@ -101,6 +108,43 @@ test('plugin upload queue serializes snapshots and always uses increasing sequen
   assert.equal(h.calls[2].body.document.name, 'After');
   assert.ok(h.calls.every(call => call.url.startsWith('https://fastapi-practice-jwse.onrender.com/api/figma-plugin/')));
   assert.equal(h.calls[1].headers.Authorization, 'Bearer scoped-token');
+});
+
+test('a large Korean snapshot uses gzip and preserves all fields', { timeout: 10000 }, async () => {
+  const h = iframe();
+  await pairIframe(h);
+  const text = '디자인 수정 기록 '.repeat(220000);
+  const sent = new Promise(resolve => h.respond(call => {
+    resolve(call);
+    return { baseline: true, received_at: '2026-11-21T15:00:00Z' };
+  }));
+  h.capture(text);
+  const call = await sent;
+  assert.equal(call.headers['Content-Type'], 'application/gzip');
+  assert.equal(call.body.document.name, text);
+  assert.ok(Buffer.byteLength(JSON.stringify(call.body)) > 4 * 1024 * 1024);
+  assert.ok(call.bytes < 4 * 1024 * 1024);
+});
+
+test('an oversized snapshot can be followed by a smaller complete capture', async () => {
+  const h = iframe();
+  await pairIframe(h);
+  h.respond(() => { throw Object.assign(new Error('크기 제한'), { status: 413 }); });
+  h.capture('Too large');
+  await settle();
+  h.respond(() => ({ baseline: true, received_at: '2026-11-21T15:00:00Z' }));
+  h.capture('Fits');
+  await settle();
+  assert.deepEqual(h.calls.slice(1).map(call => call.body.sequence), [1, 2]);
+  assert.equal(h.calls.at(-1).body.document.name, 'Fits');
+  assert.match(h.elements('status').textContent, /기준 저장 완료/);
+});
+
+test('the nested Figma editor delivers a capture error with a single history notice', () => {
+  const h = iframe();
+  h.window.onmessage({ origin: 'https://www.figma.com', source: h.parent.parent,
+    data: { pluginMessage: { type: 'capture-error', message: '크기 제한. 기존 변경사항은 유지돼요.' } } });
+  assert.equal(h.elements('status').textContent, '크기 제한. 기존 기록은 유지돼요.');
 });
 
 test('a failed upload retries the same sequence before sending newer contents', async () => {

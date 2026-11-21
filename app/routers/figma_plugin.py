@@ -41,17 +41,32 @@ def no_store(response):
     response.headers['Cache-Control'] = 'no-store'
 
 
-async def bounded_json(request, schema, max_bytes):
+async def bounded_body(request, max_bytes):
     raw = bytearray()
     async for chunk in request.stream():
+        if len(raw) + len(chunk) > max_bytes:
+            raise HTTPException(413, '전송 내용이 요청 크기 한도를 초과했어요.')
         raw.extend(chunk)
-        if len(raw) > max_bytes:
-            raise HTTPException(413, '전송 내용이 너무 큽니다. 기존 변경사항은 유지됩니다.')
+    return raw
+
+
+def parse_payload(raw, schema):
     try:
         return schema.model_validate(json.loads(raw))
     except (ValueError, ValidationError, RecursionError):
         # Validation errors must not echo a pairing code or a document's contents.
         raise HTTPException(422, '플러그인 요청 형식이 올바르지 않습니다.') from None
+
+
+async def bounded_json(request, schema, max_bytes):
+    return parse_payload(await bounded_body(request, max_bytes), schema)
+
+
+def receive_body(db, token, body, compressed):
+    if compressed:
+        body = service.decode_upload(db, token, body)
+    data = parse_payload(body, SnapshotRequest)
+    return service.receive(db, token, data.sequence, data.file_url, data.name, data.document)
 
 
 @router.get('/api/projects/{project_id}/figma/plugin', response_model=PluginStatus)
@@ -87,5 +102,6 @@ async def snapshot(request: Request, response: Response, credentials: HTTPAuthor
     no_store(response)
     if credentials is None or not credentials.credentials.startswith('moeum_figma_plugin_'):
         raise HTTPException(401, '플러그인 연결이 필요합니다.')
-    data = await bounded_json(request, SnapshotRequest, service.MAX_BODY_BYTES)
-    return await run_in_threadpool(service.receive, db, credentials.credentials, **data.model_dump())
+    body = await bounded_body(request, service.MAX_BODY_BYTES)
+    media_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
+    return await run_in_threadpool(receive_body, db, credentials.credentials, body, media_type == 'application/gzip')

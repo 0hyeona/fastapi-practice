@@ -1,4 +1,6 @@
+import base64
 import copy
+import gzip
 import json
 import unittest
 from datetime import timedelta
@@ -106,6 +108,71 @@ class FigmaPluginTests(unittest.TestCase):
         self.assertIn('Before → After', saved[0].description)
         self.assertEqual(saved[0].source, 'figma')
         self.assertEqual(saved[0].activity_type, 'design_updated')
+
+    def test_large_gzip_baseline_edit_retry_and_transition_to_legacy_json(self):
+        from app.routers.figma_plugin import receive_body
+        token = self.paired()
+        doc = document()
+        nodes = doc['children'][0]['children']
+        nodes.extend({'id': f'2:{index}', 'type': 'TEXT', 'name': f'Label {index}',
+                      'characters': '모음 디자인 편집 기록 ' * 85} for index in range(3000))
+        body = dict(sequence=1, file_url=URL, name='Demo', document=doc)
+
+        def send():
+            raw = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode()
+            packed = gzip.compress(raw, compresslevel=4)
+            self.assertGreater(len(raw), service.MAX_BODY_BYTES)
+            self.assertLess(len(packed), service.MAX_BODY_BYTES)
+            return receive_body(self.db, token, packed, True)
+
+        self.assertTrue(send()['baseline'])
+        self.assertEqual(self.activities(), [])
+        saved = self.db.get(ProjectFigmaSnapshot, self.project.id)
+        self.assertEqual(saved.content['encoding'], service.STORAGE_ENCODING)
+        self.assertLess(len(json.dumps(saved.content)), service.MAX_BODY_BYTES)
+        self.assertGreater(len(gzip.decompress(base64.b64decode(saved.content['data']))), service.MAX_BODY_BYTES)
+        self.db.expire_all()
+        nodes[0]['characters'] = 'After'
+        body['sequence'] = 2
+        self.assertEqual(send()['created'], 1)
+        self.assertTrue(send()['duplicate'])
+        body['sequence'] = 3
+        self.assertEqual(send()['created'], 0)
+        self.assertEqual(len(self.activities()), 1)
+        self.assertIn('Before → After', self.activities()[0].description)
+        self.assertIn('요소 추가 0개 · 삭제 0개 · 수정 1개', self.activities()[0].description)
+
+        # Small pre-upgrade JSON and new packed snapshots share one history.
+        body.update(sequence=4, document=document('After'))
+        self.assertEqual(receive_body(self.db, token, json.dumps(body).encode(), False)['created'], 1)
+        self.assertIn('nodes', saved.content)
+        self.assertIn('삭제 3000개', self.activities()[-1].description)
+        body.update(sequence=5, document=doc)
+        self.assertEqual(send()['created'], 1)
+        self.assertIn('추가 3000개', self.activities()[-1].description)
+
+    def test_rejected_gzip_or_storage_limit_keeps_the_previous_complete_snapshot(self):
+        from app.routers.figma_plugin import receive_body
+        token = self.paired()
+        self.push(token, 1)
+        raw = json.dumps(dict(sequence=2, file_url=URL, name='Demo', document=document('After'))).encode()
+        packed = gzip.compress(raw)
+        with patch.object(service, 'MAX_DOCUMENT_BYTES', len(raw) - 1):
+            with self.assertRaises(HTTPException) as error:
+                receive_body(self.db, token, packed, True)
+            self.assertEqual(error.exception.status_code, 413)
+        with self.assertRaises(HTTPException) as error:
+            receive_body(self.db, token, packed[:-1], True)
+        self.assertEqual(error.exception.status_code, 422)
+        with patch.object(service, 'MAX_BODY_BYTES', 64), patch.object(service, 'PLAIN_STORAGE_BYTES', 0):
+            with self.assertRaises(HTTPException) as error:
+                receive_body(self.db, token, packed, True)
+            self.assertEqual(error.exception.status_code, 413)
+        self.assertEqual(service.status(self.db, self.project)['connected'], True)
+        self.assertEqual(self.db.get(FigmaPluginConnection, self.project.id).last_sequence, 1)
+        self.assertEqual(self.activities(), [])
+        self.assertEqual(receive_body(self.db, token, packed, True)['created'], 1)
+        self.assertIn('Before → After', self.activities()[0].description)
 
     def test_retries_and_out_of_order_uploads_never_overwrite_latest_snapshot(self):
         token = self.paired()

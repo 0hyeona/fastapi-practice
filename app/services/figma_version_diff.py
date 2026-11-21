@@ -32,12 +32,13 @@ def normalize(value):
     return value
 
 
-def flatten(data):
+def flatten(data, *, max_path_bytes=None):
     """Compare own properties; moving a frame must not move every child again."""
     root = data['document']
     if not isinstance(root, dict) or root.get('type') != 'DOCUMENT':
         raise ValueError('Invalid document')
     nodes = {}
+    path_bytes = 0
     stack = [(root, None, '', None)]
     while stack:
         node, parent, path, parent_box = stack.pop()
@@ -45,6 +46,10 @@ def flatten(data):
         if not isinstance(key, str) or key in nodes or len(nodes) >= 100000:
             raise ValueError('Invalid or oversized document')
         path = (path + ' / ' + node.get('name', node['type'])).strip(' /')
+        if max_path_bytes is not None:
+            path_bytes += len(path.encode('utf-8'))
+            if path_bytes > max_path_bytes:
+                raise OverflowError('Figma snapshot paths exceed the comparison budget')
         props = {name: node[name] for name in FIELDS if name in node}
         props['parent'] = parent
         box = node.get('absoluteBoundingBox')

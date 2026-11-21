@@ -60,7 +60,8 @@ function capture() {
   try {
     const snapshot = documentSnapshot();
     const size = JSON.stringify(snapshot).length;
-    if (size > 4 * 1024 * 1024) throw new Error('파일 전송 크기를 초과했어요. 기존 변경사항은 유지돼요.');
+    // The UI measures the complete UTF-8 request and compresses it before upload.
+    if (size > 32 * 1024 * 1024) throw new Error('디자인 데이터가 압축 전 한도 32 MiB를 초과했어요.');
     figma.ui.postMessage({ type: 'snapshot', snapshot });
   } catch (error) {
     figma.ui.postMessage({ type: 'capture-error', message: error.message || '파일을 완전히 읽지 못했어요.' });

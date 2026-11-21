@@ -48,10 +48,29 @@ function status(message, error = false) {
 function editor(message) { parent.postMessage({ pluginMessage: message }, '*'); }
 
 async function request(path, body, token) {
+  let payload = JSON.stringify(body);
+  let contentType = 'application/json';
+  if (token && payload.length > 64 * 1024) {
+    const raw = new Blob([payload]);
+    const mib = 1024 * 1024;
+    const showSize = bytes => (bytes / mib).toFixed(1) + ' MiB';
+    if (raw.size > 32 * mib) {
+      throw Object.assign(new Error('디자인 데이터가 ' + showSize(raw.size) + '로 압축 전 한도 32 MiB를 초과했어요.'), { status: 413 });
+    }
+    if (typeof CompressionStream === 'function') {
+      payload = await new Response(raw.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+      contentType = 'application/gzip';
+      if (payload.size > 4 * mib) {
+        throw Object.assign(new Error('압축 후 ' + showSize(payload.size) + '로 전송 한도 4 MiB를 초과했어요.'), { status: 413 });
+      }
+    } else if (raw.size > 4 * mib) {
+      throw Object.assign(new Error('이 버전의 Figma는 대용량 전송에 필요한 압축을 지원하지 않아요. Figma Desktop을 업데이트해 주세요.'), { status: 413 });
+    }
+  }
   const response = await fetch(API + path, {
-    method: 'POST', headers: { 'Content-Type': 'application/json',
+    method: 'POST', headers: { 'Content-Type': contentType,
       ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-    body: JSON.stringify(body), signal: AbortSignal.timeout(60000),
+    body: payload, signal: AbortSignal.timeout(60000),
   });
   const data = await response.json();
   if (!response.ok) {
@@ -75,6 +94,7 @@ el('pair-form').onsubmit = async event => {
     el('project').textContent = data.project_name + '에 연결됐어요.';
     el('pair-form').hidden = true;
     el('connected').hidden = false;
+    status('연결 코드 승인 완료 · Figma의 파일 정보를 기다리는 중…');
     editor({ type: 'start' });
   } catch (error) {
     status(error.message || '연결하지 못했어요. 새 연결 코드로 다시 시도해 주세요.', true);
@@ -89,17 +109,24 @@ async function pump() {
     latest = undefined;
   }
   status('변경 내용을 모음으로 전송 중…');
-  let succeeded = false;
+  let nextAllowed = false;
   try {
     const result = await request('/api/figma-plugin/snapshot', pending, session.token);
     pending = undefined;
-    succeeded = true;
+    nextAllowed = true;
     const time = new Intl.DateTimeFormat('ko-KR', { timeStyle: 'medium' }).format(new Date(result.received_at));
     status(result.baseline ? '기준 저장 완료 · 이제 수정한 내용부터 기록돼요. (' + time + ')'
       : result.created ? '전송 완료 · 변경사항 1개 추가 (' + time + ')'
       : '전송 완료 · 추가 변경 없음 (' + time + ')');
   } catch (error) {
-    status((error.message || '서버에 연결하지 못했어요.') + ' 전송하지 못한 내용은 이 창에 보관돼요. 지금 보내기로 다시 시도하세요.', true);
+    if (error.status === 413) {
+      // Every capture is a complete file. A later, smaller capture can replace this rejected one.
+      pending = undefined;
+      nextAllowed = true;
+      status(error.message + ' 기존 기록은 유지돼요.', true);
+    } else {
+      status((error.message || '서버에 연결하지 못했어요.') + ' 전송하지 못한 내용은 이 창에 보관돼요. 지금 보내기로 다시 시도하세요.', true);
+    }
     if (error.status === 401) {
       editor({ type: 'stop' });
       session = undefined; pending = undefined; latest = undefined;
@@ -109,7 +136,7 @@ async function pump() {
   } finally {
     sending = false;
     // Only one request is in flight. An older response can never overwrite newer data.
-    if (succeeded && latest) void pump();
+    if (nextAllowed && latest) void pump();
   }
 }
 
@@ -117,14 +144,27 @@ el('send').onclick = () => {
   if (pending) void pump();
   editor({ type: 'capture' });
 };
+function isEditorMessage(event) {
+  if (event.source === parent) return true;
+  if (!event.source || event.origin !== 'https://www.figma.com') return false;
+
+  // Figma Desktop can host this UI inside several nested frames.
+  let frame = parent;
+  while (frame !== frame.parent) {
+    frame = frame.parent;
+    if (event.source === frame) return true;
+  }
+  return false;
+}
+
 window.onmessage = event => {
-  if (event.source !== parent) return;
-  const message = event.data.pluginMessage;
-  if (!message) return;
+  if (!isEditorMessage(event)) return;
+  const message = event.data?.pluginMessage;
+  if (!message || typeof message !== 'object') return;
   if (message.type === 'file') el('file').textContent = '현재 파일: ' + message.name;
   else if (message.type === 'loading') status('파일의 모든 페이지를 읽는 중… 큰 파일은 시간이 걸릴 수 있어요.');
   else if (message.type === 'changed') status('편집 감지 · 입력을 멈추면 약 1초 후 보내요.');
-  else if (message.type === 'capture-error') status(message.message + ' 기존 기록은 유지돼요.', true);
+  else if (message.type === 'capture-error') status(message.message.replace(/\s*기존 (변경사항|기록)은 유지돼요\.$/, '') + ' 기존 기록은 유지돼요.', true);
   else if (message.type === 'snapshot') { latest = message.snapshot; void pump(); }
 };
 </script>
