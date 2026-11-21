@@ -8,11 +8,51 @@ from app.models.project import Project
 from app.models.project_activity import ProjectActivity
 from app.models.project_notion_snapshot import ProjectNotionSnapshot
 
+TEXT_BLOCKS = {
+    'paragraph', 'heading_1', 'heading_2', 'heading_3', 'heading_4',
+    'bulleted_list_item', 'numbered_list_item', 'quote', 'callout',
+    'toggle', 'code', 'to_do', 'template',
+}
+MEDIA_LABELS = {'image': '이미지', 'video': '동영상', 'audio': '오디오',
+                'file': '파일', 'pdf': 'PDF', 'bookmark': '북마크',
+                'embed': '임베드', 'link_preview': '링크 미리보기'}
+STRUCTURAL_BLOCKS = {'column', 'column_list', 'table', 'synced_block',
+                     'divider', 'breadcrumb', 'table_of_contents'}
+
 
 def rich_text(parts):
     if not isinstance(parts, list):
         raise ValueError("Invalid rich text")
     return ''.join(part['plain_text'] if 'plain_text' in part else part['text']['content'] for part in parts)
+
+
+def block_text(kind, payload):
+    """Missing text fields are read failures, never silently deleted paragraphs."""
+    if kind in TEXT_BLOCKS or 'rich_text' in payload:
+        text = rich_text(payload['rich_text'])
+        if kind == 'to_do':
+            if type(payload['checked']) is not bool:
+                raise ValueError('Invalid checkbox')
+            text = (('[x] ' if payload['checked'] else '[ ] ') + text) if text.strip() else ''
+        return text
+    if kind == 'table_row':
+        cells = [rich_text(cell) for cell in payload['cells']]
+        return ' | '.join(cells) if any(cell.strip() for cell in cells) else ''
+    if kind in ('child_page', 'child_database'):
+        return payload['title']
+    if kind == 'equation':
+        return payload['expression']
+    if kind in MEDIA_LABELS:
+        caption = rich_text(payload.get('caption', []))
+        # Identify non-text elements without persisting expiring signed URLs.
+        return '[' + MEDIA_LABELS[kind] + ']' + (' ' + caption if caption.strip() else '')
+    if kind == 'link_to_page':
+        return '[페이지 링크]'
+    if kind in STRUCTURAL_BLOCKS:
+        return ''
+    if 'caption' in payload:
+        return rich_text(payload['caption'])
+    return None
 
 
 def collect(project, api, db=None):
@@ -54,15 +94,9 @@ def collect(project, api, db=None):
                 payload = block[kind]
                 if not isinstance(payload, dict):
                     raise ValueError('Invalid block payload')
-                text = rich_text(payload.get('rich_text', payload.get('caption', [])))
-                if kind == 'table_row':
-                    text = ' | '.join(rich_text(cell) for cell in payload['cells'])
-                if kind in ('child_page', 'child_database'):
-                    text = payload['title']
-                if kind == 'to_do':
-                    if type(payload['checked']) is not bool:
-                        raise ValueError('Invalid checkbox')
-                    text = ('[x] ' if payload['checked'] else '[ ] ') + text
+                text = block_text(kind, payload)
+                if text is not None and not isinstance(text, str):
+                    raise ValueError('Invalid block text')
                 blocks[block_id] = {'type': kind, 'text': text}
                 # Separate pages/databases are outside this page's text scope.
                 if block['has_children'] and kind not in ('child_page', 'child_database'):
@@ -86,18 +120,41 @@ def collect(project, api, db=None):
         raise HTTPException(502, 'Invalid Notion content response; snapshot preserved.') from None
 
 
+def comparable_text(block):
+    text = block.get('text')
+    if isinstance(text, str) and block['type'] in MEDIA_LABELS:
+        prefix = '[' + MEDIA_LABELS[block['type']] + ']'
+        if not text.startswith(prefix):
+            return prefix + (' ' + text if text.strip() else '')
+    return text
+
+
 def changes(before, after):
     if before['title'] != after['title']:
         yield 'title_changed', '제목 변경', before['title'], after['title']
     old, new = before['blocks'], after['blocks']
     for key, block in new.items():
+        text = comparable_text(block)
+        if text is None:
+            continue
         if key not in old:
-            yield 'content_added', '내용 추가', None, block['text']
-        elif old[key] != block:
-            yield 'content_updated', '내용 수정', old[key]['text'], block['text']
+            if text.strip():
+                yield 'content_added', '내용 추가', None, text
+        else:
+            previous = comparable_text(old[key])
+            if previous is None or previous == text or not (previous.strip() or text.strip()):
+                continue
+            if not previous.strip():
+                yield 'content_added', '내용 추가', None, text
+            elif not text.strip():
+                yield 'content_deleted', '내용 삭제', previous, None
+            else:
+                yield 'content_updated', '내용 수정', previous, text
     for key, block in old.items():
         if key not in new:
-            yield 'content_deleted', '내용 삭제', block['text'], None
+            text = comparable_text(block)
+            if text is not None and text.strip():
+                yield 'content_deleted', '내용 삭제', text, None
 
 
 def sync(db, project, progress, api):
@@ -112,6 +169,11 @@ def sync(db, project, progress, api):
     snapshot = db.scalar(select(ProjectNotionSnapshot).where(
         ProjectNotionSnapshot.project_id == project.id,
         ProjectNotionSnapshot.resource_id == resource).with_for_update().execution_options(populate_existing=True))
+    if snapshot is not None:
+        for block_id, block in current['blocks'].items():
+            previous = snapshot.content['blocks'].get(block_id)
+            if block['text'] is None and previous is not None:
+                current['blocks'][block_id] = previous
     diffs = [] if snapshot is None else list(changes(snapshot.content, current))
     if snapshot is None:
         db.add(ProjectNotionSnapshot(project_id=project.id, resource_id=resource, revision=1, content=current))
@@ -124,6 +186,8 @@ def sync(db, project, progress, api):
                             f'{current["title"] or "Notion"} · {label}', description,
                             f'https://www.notion.so/{resource}', timestamp, kind)
             db.add(ProjectActivity(project_id=project.id, source='notion', **row))
+    if snapshot is not None:
+        # Empty/structural edits still become the next comparison baseline.
         snapshot.content = current
     # Counters count generated change records, not pages or baseline snapshots.
     return {'source': 'notion', 'fetched': len(diffs), 'created': len(diffs), 'existing': 0,
