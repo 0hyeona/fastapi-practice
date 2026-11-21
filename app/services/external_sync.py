@@ -141,7 +141,7 @@ def figma_cursor(value, resource):
     return value
 
 
-def collect_figma(project, cursor=None):
+def collect_figma(project, cursor=None, db=None):
     resource = resource_id('figma', project.figma_url)
     token = scoped_token('figma', project.owner_id, resource)
     headers = {'X-Figma-Token': token}
@@ -153,16 +153,25 @@ def collect_figma(project, cursor=None):
         if next_cursor:
             figma_cursor(next_cursor, resource)
         rows = []
+        revisions = {}
+        current = None
         for version in versions['versions']:
+            revisions[str(version['id'])] = {**version, 'id': str(version['id'])}
             rows.append(event(resource, version['id'], version.get('label') or 'Figma 버전 변경',
                 version.get('description') or '', f'https://www.figma.com/file/{resource}?version-id={version["id"]}',
                 version['created_at'], 'file_version'))
         # Capture the current file state as well as named/saved history on the first page.
         if not cursor:
             current = fetch_json('figma', endpoint, headers, {'depth': 1})
+            revisions.setdefault(str(current['version']), {'id': str(current['version']),
+                'created_at': current['lastModified']})
             rows.append(event(resource, current['version'], current.get('name') or 'Figma 파일 변경',
                 '수집 시점의 파일 버전', f'https://www.figma.com/file/{resource}', current['lastModified'], 'file_version'))
         rows = list({row['external_id']: row for row in reversed(rows)}.values())
+        from app.services.figma_version_diff import enrich
+        import sys
+        enrich(rows, revisions, project, sys.modules[__name__], db, resource, headers,
+               current=current, has_older=bool(next_cursor))
         return rows, next_cursor
     except (KeyError, TypeError, ValueError, AttributeError):
         raise HTTPException(502, 'Figma 변경사항 응답 형식이 올바르지 않습니다.') from None
@@ -179,7 +188,7 @@ def _sync_external(db, project, source, cursor, progress):
         return sync(db, project, progress, sys.modules[__name__])
     original_url = getattr(project, source + '_url')
     original_owner = project.owner_id
-    rows, next_cursor = collect_figma(project, cursor)
+    rows, next_cursor = collect_figma(project, cursor, db)
     progress["fetched"] = len(rows)
     locked = db.scalar(select(Project).where(Project.id == project.id).with_for_update().execution_options(populate_existing=True))
     if locked is None or locked.owner_id != original_owner or getattr(locked, source + '_url') != original_url:
@@ -194,6 +203,13 @@ def _sync_external(db, project, source, cursor, progress):
             db.add(ProjectActivity(project_id=project.id, source=source, **row))
             existing.add(row['external_id'])
             created += 1
+        elif row['description'].startswith('이전 버전과 비교한 변경 내용\n'):
+            # Enrich the original activity without duplicating it or touching Stories.
+            saved = db.scalar(select(ProjectActivity).where(
+                ProjectActivity.project_id == project.id, ProjectActivity.source == source,
+                ProjectActivity.external_id == row['external_id']).with_for_update().execution_options(populate_existing=True))
+            if saved is not None and saved.story_id is None:
+                saved.description = row['description']
     return {'source': source, 'fetched': len(rows), 'created': created, 'existing': len(rows)-created,
             'has_next': bool(next_cursor), 'next_cursor': next_cursor}
 
