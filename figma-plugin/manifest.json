@@ -1,0 +1,11 @@
+{
+  "name": "모음 실시간 연결",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["https://fastapi-practice-jwse.onrender.com"]
+  }
+}

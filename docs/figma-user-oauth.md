@@ -56,12 +56,19 @@ python -m scripts.setup_figma_accounts_db --apply
 | 컬럼 | 형식 | 용도 |
 | --- | --- | --- |
 | `user_id` | BIGINT UNSIGNED, PK 또는 UNIQUE | `users.id`와 연결, 사용자당 한 계정 |
-| `figma_user_id` | VARCHAR(128) | 승인한 Figma 계정 ID. 큰 숫자도 문자열로 보존 |
+| `figma_user_id` | VARCHAR(128), NULL 허용 | 승인한 Figma 계정 ID. 큰 숫자도 문자열로 보존. NULL은 재승인 대기 |
 | `credentials` | TEXT | 사용자 ID와 Figma 계정 ID에 묶어 암호화한 access/refresh token |
 | `expires_at` | DATETIME | access token 만료 시각, UTC |
 | `updated_at` | DATETIME | 마지막 토큰 저장 시각, UTC |
 
-기존 테이블에 이 컬럼이 있으면 새로 만들지 않습니다. 컬럼 이름이 다르거나 `user_id`의
+기존 테이블에 이 컬럼이 있으면 새로 만들지 않습니다. 기존 테이블에 `user_id`, `credentials`,
+`expires_at`, `updated_at`만 있고 `figma_user_id`가 없다면, TiDB에서
+`sql/migrate_figma_accounts_identity.sql`을 적용합니다. 이 파일의 DB 이름 `moeum_db`는
+실제 백엔드의 `DB_NAME`과 같아야 합니다. 누락 컬럼만 추가하며 기존 인증 데이터는 보존합니다.
+기존 행의 NULL 값에 임의의 Figma ID를 입력하지 않습니다. 사용자가 Figma OAuth를 다시 승인하면
+실제 계정 ID와 새 암호화 토큰이 함께 저장됩니다. 그 전까지 연결 상태는 `connected: false`입니다.
+
+컬럼 이름이 다르거나 `user_id`의
 고유 제약이 없으면 설치 스크립트가 차이를 알리고 중단합니다. `--apply`도 기존 테이블을
 삭제하거나 자동 변경하지 않습니다. 기존 구조를 확인한 뒤 모델/컬럼을 맞춰야 합니다.
 이미 개인 액세스 토큰을 저장했던 계정은 새 OAuth 승인으로 연결합니다.

@@ -1,0 +1,340 @@
+diff --git a/.env.example b/.env.example
+index 973d1f9..ad2d4c2 100644
+--- a/.env.example
++++ b/.env.example
+@@ -15,6 +15,8 @@ GMAIL_REFRESH_TOKEN=
+ GMAIL_FROM_EMAIL=
+ 
+ # GitHub OAuth App (Client Secret은 실제 .env에만 입력하세요.)
++# Generate once with cryptography.fernet.Fernet.generate_key(); keep stable across deployments.
++GITHUB_CREDENTIAL_ENCRYPTION_KEY=
+ GITHUB_CLIENT_ID=
+ GITHUB_CLIENT_SECRET=
+ GITHUB_REDIRECT_URI=http://localhost:8000/api/auth/github/callback
+diff --git a/README.md b/README.md
+index 3241e01..701b129 100644
+--- a/README.md
++++ b/README.md
+@@ -24,10 +24,23 @@ Copy-Item .env.example .env
+ 기존 DB에는 한 번 `python -m scripts.setup_github_db`를 실행하여 GitHub 회원 연결
+ 테이블을 추가합니다. 새 DB에는 `sql/schema.sql`을 사용합니다.
+ 
++기존 TiDB에는 배포 전에 `sql/github_user_oauth.sql`을 한 번 실행합니다.
++Render의 `GITHUB_CREDENTIAL_ENCRYPTION_KEY`에는 아래 명령이 출력하는 값을 저장하고
++이후 배포에도 같은 키를 유지합니다.
++
++```bash
++python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
++```
++
++GitHub로 로그인한 방문자는 본인 프로젝트에 공개 저장소 주소를 등록할 수 있습니다.
++대시보드 조회와 동기화는 프로젝트 소유자의 OAuth 토큰을 사용합니다.
++기존 방문자도 배포 후 한 번 GitHub로 다시 로그인하면 연결됩니다.
++공용 전시 기기에서는 방문자마다 새 시크릿 창을 열고 체험이 끝나면 모든 시크릿 창을 닫습니다.
++
+ 1. 브라우저에서 `http://localhost:8000/api/auth/github/login`을 엽니다.
+ 2. GitHub에 로그인하고 권한에 동의합니다.
+ 3. callback 성공 응답의 `access_token`은 **우리 서비스 로그인 토큰**이며,
+-   `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 반환하거나 저장하지 않습니다.
++   `token_type`은 `bearer`, `expires_in`은 `3600`초입니다. GitHub 토큰은 서버가 암호화하여 해당 회원의 github_accounts 행에 보관합니다.
+ 4. Swagger의 **Authorize**에 이 토큰만 입력하면 `/api/auth/me`, 프로젝트 API,
+    `/api/auth/logout`을 기존 로그인과 동일하게 사용할 수 있습니다.
+ ****
+diff --git a/app/models/github_account.py b/app/models/github_account.py
+index 44786f0..14845a6 100644
+--- a/app/models/github_account.py
++++ b/app/models/github_account.py
+@@ -1,6 +1,6 @@
+ """변경되지 않는 GitHub 숫자 ID와 서비스 회원을 연결합니다."""
+ 
+-from sqlalchemy import Column, ForeignKey, Integer
++from sqlalchemy import Column, ForeignKey, Integer, Text
+ from sqlalchemy.dialects.mysql import BIGINT
+ 
+ from app.database.database import Base
+@@ -12,3 +12,5 @@ class GithubAccount(Base):
+     github_id = Column(BIGINT(unsigned=True).with_variant(Integer, "sqlite"), primary_key=True)
+     user_id = Column(BIGINT(unsigned=True).with_variant(Integer, "sqlite"),
+                      ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True)
++
++    token_ciphertext = Column(Text, nullable=True)
+diff --git a/app/routers/auth.py b/app/routers/auth.py
+index f2dec3d..1206c59 100644
+--- a/app/routers/auth.py
++++ b/app/routers/auth.py
+@@ -65,6 +65,7 @@ def github_login(request: Request):
+         "client_id": client_id,
+         "redirect_uri": redirect_uri,
+         "scope": "read:user user:email",
++        "prompt": "select_account",
+         "state": state,
+     })
+     response = RedirectResponse(f"https://github.com/login/oauth/authorize?{query}")
+@@ -89,10 +90,10 @@ async def github_callback(request: Request, code: str | None = None,
+             raise HTTPException(400, "GitHub 로그인이 취소되었거나 승인되지 않았습니다.")
+         if not code:
+             raise HTTPException(400, "GitHub 인증 코드가 없습니다.")
+-        user = await fetch_github_user(code)
++        user, github_token = await fetch_github_user(code)
+         # 명시적으로 설정한 로컬 테스트에서만 이메일 중복을 우회합니다.
+         test_email = os.getenv("GITHUB_TEST_EMAIL") if request.url.hostname in {"localhost", "127.0.0.1"} else None
+-        session = github_login_session(db, user, test_email=test_email)
++        session = github_login_session(db, user, github_token, test_email=test_email)
+         response = github_completion_response({"login_code": create_handoff(db, session)})
+     except InvalidCredentialsError as exc:
+         response = github_completion_response({"detail": str(exc)}, status_code=403)
+diff --git a/app/routers/project_connections.py b/app/routers/project_connections.py
+index c4e5e67..7f102aa 100644
+--- a/app/routers/project_connections.py
++++ b/app/routers/project_connections.py
+@@ -51,7 +51,7 @@ def describe_connection(project, source, db=None):
+         return dict(result, connection_status='invalid_url', detail='파일/페이지/저장소 링크 형식을 확인하세요.')
+     result['external_id'] = identifier
+     if source == 'github':
+-        authenticated = 'Authorization' in GitHubClient(identifier, project.owner_id).headers
++        authenticated = 'Authorization' in GitHubClient(identifier, project.owner_id, db).headers
+         return dict(result, connection_status='configured' if authenticated else 'public_access_unverified',
+                     detail='실제 접근 여부는 동기화 시 확인합니다.' if authenticated else '공개 저장소 조회 모드입니다. 비공개 저장소는 인증 설정이 필요합니다.')
+     try:
+diff --git a/app/routers/project_github.py b/app/routers/project_github.py
+index 21b5aa0..d539785 100644
+--- a/app/routers/project_github.py
++++ b/app/routers/project_github.py
+@@ -28,8 +28,8 @@ def owned_project(project_id: int = Path(gt=0), db: Session = Depends(get_db), u
+     return project
+ 
+ 
+-def github_client(project=Depends(owned_project)):
+-    return GitHubClient(repository_name(project.github_url), project.owner_id)
++def github_client(project=Depends(owned_project), db: Session = Depends(get_db)):
++    return GitHubClient(repository_name(project.github_url), project.owner_id, db)
+ 
+ 
+ @router.get("/{project_id}/dashboard", response_model=Dashboard, summary="대시보드 요약")
+@@ -47,7 +47,7 @@ def dashboard(project=Depends(owned_project), db: Session = Depends(get_db)):
+     if not project.github_url:
+         return result
+     try:
+-        github = GitHubClient(repository_name(project.github_url), project.owner_id)
++        github = GitHubClient(repository_name(project.github_url), project.owner_id, db)
+         repo, _ = github.get()
+         commits, _ = github.get("/commits", {"per_page": 5, "page": 1}, empty_list=True)
+         result.update(github={
+diff --git a/app/services/github_credentials.py b/app/services/github_credentials.py
+new file mode 100644
+index 0000000..6817d1c
+--- /dev/null
++++ b/app/services/github_credentials.py
+@@ -0,0 +1,19 @@
++"""Encrypt GitHub credentials only on the backend."""
++import os
++
++from cryptography.fernet import Fernet, InvalidToken
++from fastapi import HTTPException
++
++
++def cipher() -> Fernet:
++    try:
++        return Fernet(os.environ["GITHUB_CREDENTIAL_ENCRYPTION_KEY"].encode())
++    except (KeyError, ValueError) as exc:
++        raise HTTPException(503, "GitHub 인증 정보 암호화 키 설정을 확인해주세요.") from exc
++
++
++def decrypt_token(ciphertext: str) -> str:
++    try:
++        return cipher().decrypt(ciphertext.encode()).decode()
++    except InvalidToken as exc:
++        raise HTTPException(503, "GitHub 인증 정보를 읽을 수 없습니다. 서버 암호화 키를 확인해주세요.") from exc
+diff --git a/app/services/github_login.py b/app/services/github_login.py
+index 075bf98..34f353c 100644
+--- a/app/services/github_login.py
++++ b/app/services/github_login.py
+@@ -8,6 +8,7 @@ from sqlalchemy import select
+ from sqlalchemy.exc import IntegrityError
+ from sqlalchemy.orm import Session
+ 
++from app.services.github_credentials import cipher
+ from app.models.github_account import GithubAccount
+ from app.models.user import User
+ from app.schemas.auth import LoginResponse
+@@ -19,8 +20,9 @@ def find_github_member(db: Session, github_id: int) -> User | None:
+                      .where(GithubAccount.github_id == github_id))
+ 
+ 
+-def github_login_session(db: Session, profile: dict, test_email: str | None = None) -> LoginResponse:
++def github_login_session(db: Session, profile: dict, github_token: str, test_email: str | None = None) -> LoginResponse:
+     github_id = profile["id"]
++    encrypted = cipher().encrypt(github_token.encode()).decode()
+     try:
+         user = find_github_member(db, github_id)
+         if user is None:
+@@ -51,12 +53,14 @@ def github_login_session(db: Session, profile: dict, test_email: str | None = No
+             db.flush()
+             db.add(GithubAccount(github_id=github_id, user_id=user.id))
+             db.flush()
++        db.get(GithubAccount, github_id).token_ciphertext = encrypted
+         return create_login_session(db, user)
+     except IntegrityError as exc:
+         db.rollback()
+         # 동시에 같은 GitHub 계정이 가입한 경우 먼저 저장된 회원으로 로그인합니다.
+         user = find_github_member(db, github_id)
+         if user is not None:
++            db.get(GithubAccount, github_id).token_ciphertext = encrypted
+             return create_login_session(db, user)
+         raise HTTPException(409, "회원 정보가 이미 사용 중입니다. 기존 계정으로 로그인하세요.") from exc
+     except Exception:
+diff --git a/app/services/github_oauth.py b/app/services/github_oauth.py
+index 46e1880..1991dce 100644
+--- a/app/services/github_oauth.py
++++ b/app/services/github_oauth.py
+@@ -7,7 +7,7 @@ import httpx
+ from fastapi import HTTPException
+ 
+ 
+-async def fetch_github_user(code: str) -> dict:
++async def fetch_github_user(code: str) -> tuple[dict, str]:
+     client_id = os.getenv("GITHUB_CLIENT_ID")
+     client_secret = os.getenv("GITHUB_CLIENT_SECRET")
+     redirect_uri = os.getenv("GITHUB_REDIRECT_URI")
+@@ -65,4 +65,4 @@ async def fetch_github_user(code: str) -> dict:
+         raise HTTPException(502, "GitHub 인증 또는 사용자 정보 조회에 실패했습니다. 다시 로그인하세요.") from exc
+ 
+     # 토큰은 GitHub 요청에만 사용하고 브라우저 응답에는 포함하지 않습니다.
+-    return {key: user.get(key) for key in ("id", "login", "name", "email", "avatar_url", "html_url")}
++    return {key: user.get(key) for key in ("id", "login", "name", "email", "avatar_url", "html_url")}, token
+diff --git a/app/services/github_sync.py b/app/services/github_sync.py
+index 5d8706f..fefb573 100644
+--- a/app/services/github_sync.py
++++ b/app/services/github_sync.py
+@@ -10,7 +10,7 @@ from app.services.project_github import GitHubClient, repository_name
+ 
+ def _sync_commits(db, project, branch, page, per_page, progress):
+     repository = repository_name(project.github_url)
+-    github = GitHubClient(repository, project.owner_id)
++    github = GitHubClient(repository, project.owner_id, db)
+     params = {"page": page, "per_page": per_page}
+     if branch:
+         params["sha"] = branch
+diff --git a/app/services/project_github.py b/app/services/project_github.py
+index 1cb42ff..99bb1f3 100644
+--- a/app/services/project_github.py
++++ b/app/services/project_github.py
+@@ -5,6 +5,9 @@ from urllib.parse import urlsplit
+ 
+ import httpx
+ from fastapi import HTTPException
++from sqlalchemy import select
++from app.models.github_account import GithubAccount
++from app.services.github_credentials import decrypt_token
+ 
+ 
+ def repository_name(url):
+@@ -28,9 +31,15 @@ def repository_name(url):
+ 
+ 
+ class GitHubClient:
+-    def __init__(self, repository, owner_id):
++    def __init__(self, repository, owner_id, db=None):
+         self.repository = repository
+         self.headers = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10"}
++        ciphertext = db.scalar(select(GithubAccount.token_ciphertext).where(
++            GithubAccount.user_id == owner_id)) if db is not None else None
++        self.personal = bool(ciphertext)
++        if ciphertext:
++            self.headers["Authorization"] = f"Bearer {decrypt_token(ciphertext)}"
++            return
+         # A shared token must not grant all app users access to private repositories.
+         allowed = {s.strip().lower() for s in os.getenv("GITHUB_ALLOWED_REPOSITORIES", "").split(",")}
+         if str(owner_id) == os.getenv("GITHUB_TOKEN_OWNER_ID", "").strip() and repository.lower() in allowed:
+@@ -63,6 +72,8 @@ class GitHubClient:
+         if response.status_code == 404:
+             raise HTTPException(404, "GitHub 저장소 또는 브랜치/커밋을 찾을 수 없습니다.")
+         if response.status_code == 401:
++            if self.personal:
++                raise HTTPException(409, "GitHub 연결이 만료되었습니다. GitHub로 다시 로그인해주세요.")
+             raise HTTPException(502, "서버의 GitHub 토큰 설정을 확인해주세요.")
+         if response.status_code == 422:
+             raise HTTPException(422, "GitHub 조회 조건을 확인해주세요.")
+diff --git a/sql/github_user_oauth.sql b/sql/github_user_oauth.sql
+new file mode 100644
+index 0000000..ea469ae
+--- /dev/null
++++ b/sql/github_user_oauth.sql
+@@ -0,0 +1 @@
++ALTER TABLE github_accounts ADD COLUMN IF NOT EXISTS token_ciphertext TEXT NULL;
+diff --git a/sql/schema.sql b/sql/schema.sql
+index 0221baa..d1433a6 100644
+--- a/sql/schema.sql
++++ b/sql/schema.sql
+@@ -30,9 +30,10 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
+         ON DELETE CASCADE
+ ) ENGINE=InnoDB;
+ 
+--- GitHub 숫자 ID로 회원 연결: GitHub 토큰은 저장하지 않습니다.
++-- GitHub 숫자 ID와 사용자별 암호화된 OAuth 토큰
+ CREATE TABLE IF NOT EXISTS github_accounts (
+     github_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
++    token_ciphertext TEXT NULL,
+     user_id BIGINT UNSIGNED NOT NULL UNIQUE,
+     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+ ) ENGINE=InnoDB;
+diff --git a/tests/test_github_oauth.py b/tests/test_github_oauth.py
+index 9b19843..d7ef384 100644
+--- a/tests/test_github_oauth.py
++++ b/tests/test_github_oauth.py
+@@ -6,6 +6,7 @@ import unittest
+ from unittest.mock import patch
+ from urllib.parse import parse_qs, urlsplit
+ 
++from cryptography.fernet import Fernet
+ import httpx
+ from fastapi.testclient import TestClient
+ from sqlalchemy import create_engine, func, select
+@@ -24,6 +25,7 @@ from app.services.auth_service import hash_token
+ class GithubOAuthTests(unittest.TestCase):
+     def setUp(self):
+         self.environment = patch.dict(os.environ, {
++            "GITHUB_CREDENTIAL_ENCRYPTION_KEY": Fernet.generate_key().decode(),
+             "GITHUB_CLIENT_ID": "test-client", "GITHUB_CLIENT_SECRET": "test-secret",
+             "GITHUB_REDIRECT_URI": "http://localhost:8000/api/auth/github/callback",
+             "GITHUB_TEST_EMAIL": "",
+@@ -116,6 +118,26 @@ class GithubOAuthTests(unittest.TestCase):
+         self.assertNotIn("github_oauth_state", self.client.cookies)
+         self.assertEqual(response.headers["cache-control"], "no-store")
+ 
++    def test_visitors_use_only_their_own_repository_credentials(self):
++        from app.services.project_github import GitHubClient
++        first = self.callback().json()["user"]["id"]
++        self.profile.update(id=456, login="visitor2")
++        self.emails[0]["email"] = "visitor2@example.com"
++        self.token_body = {"access_token": "second-private-token"}
++        second = self.callback().json()["user"]["id"]
++        self.assertNotEqual(first, second)
++        with Session(self.engine) as db:
++            for owner, token in [(first, "private-token"), (second, "second-private-token")]:
++                github = GitHubClient("public/demo", owner, db)
++                self.assertEqual(github.headers["Authorization"], "Bearer " + token)
++                stored = db.scalar(select(GithubAccount.token_ciphertext).where(GithubAccount.user_id == owner))
++                self.assertNotIn(token, stored)
++        self.token_body = {"access_token": "replacement"}
++        self.assertEqual(self.callback().json()["user"]["id"], second)
++        with Session(self.engine) as db:
++            self.assertEqual(GitHubClient("public/demo", second, db).headers["Authorization"], "Bearer replacement")
++            self.assertEqual(GitHubClient("public/demo", first, db).headers["Authorization"], "Bearer private-token")
++
+     def test_untrusted_callback_never_contacts_github(self):
+         response = self.client.get("/api/auth/github/callback?code=x", follow_redirects=False)
+         self.assertEqual(response.status_code, 303)
+diff --git a/tests/test_github_redirect.py b/tests/test_github_redirect.py
+index b8acf48..fa1d696 100644
+--- a/tests/test_github_redirect.py
++++ b/tests/test_github_redirect.py
+@@ -33,7 +33,7 @@ class GithubRedirectTests(unittest.TestCase):
+ 
+     def test_success_matches_frontend_fragment_contract(self):
+         async def profile(code):
+-            return {"id": 123, "login": "test"}
++            return {"id": 123, "login": "test"}, "test-token"
+         session = LoginResponse(access_token="app-session", expires_in=3600, user={
+             "id": 1, "user_id": "test", "name": "Test", "email": "test@example.com",
+             "account_status": "active", "created_at": "2026-10-27T00:00:00"})

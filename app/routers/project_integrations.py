@@ -28,7 +28,9 @@ class ConnectionState(BaseModel):
 @router.get('/{project_id}/figma/sync-status')
 def figma_sync_status(project=Depends(accessible_project), db: Session = Depends(get_db)):
     from app.services.figma_sync_policy import state
-    return state(db, project.id)
+    from app.services.figma_plugin import status
+    plugin = status(db, project)
+    return {**state(db, project.id), 'transport': 'plugin' if plugin['enabled'] else 'rest', 'plugin': plugin}
 
 
 @router.get('/{project_id}/integrations', response_model=dict[str, ConnectionState], summary='Figma·Notion 연결 설정 확인')
@@ -40,6 +42,12 @@ def integrations(project=Depends(accessible_project), db: Session = Depends(get_
              description='현재 파일 버전과 버전 기록 한 페이지를 저장합니다. has_next=true이면 next_cursor를 cursor로 전달하세요.')
 def sync_figma(project=Depends(owned_project), db: Session = Depends(get_db),
                cursor: str | None = Query(None, min_length=1, max_length=2048)):
+    from app.services.figma_plugin import status
+    if status(db, project)['enabled']:
+        # Refreshing a live connection reads saved activities. Editor pushes are
+        # independent of REST history and must not erase an active REST cooldown.
+        return {'source': 'figma', 'fetched': 0, 'created': 0, 'existing': 0,
+                'has_next': False, 'next_cursor': None}
     return sync_external(db, project, 'figma', cursor)
 
 

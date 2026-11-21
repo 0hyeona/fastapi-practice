@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; font: 13px/1.6 Inter, system-ui, sans-serif; color: var(--figma-color-text, #202332); background: var(--figma-color-bg, #fff); }
+  h1 { font-size: 19px; margin: 0 0 8px; } p { margin: 8px 0; }
+  label { display: block; font-weight: 600; margin-top: 14px; }
+  input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #aab2c4; border-radius: 6px; }
+  button { padding: 10px 16px; margin-top: 14px; border: 0; border-radius: 7px; background: #587aff; color: white; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: wait; }
+  .hint { font-size: 12px; color: var(--figma-color-text-secondary, #626a7b); }
+  #status { padding: 12px; margin-top: 18px; border-radius: 8px; background: var(--figma-color-bg-secondary, #f3f5fc); overflow-wrap: anywhere; }
+  #status[data-error="true"] { color: #cc3434; }
+  [hidden] { display: none !important; }
+</style>
+<h1>모음 실시간 연결</h1>
+<p>이 창을 켜두면 편집한 내용을 모음으로 보내요.</p>
+<p class="hint" id="file"></p>
+<form id="pair-form">
+  <label for="code">모음에서 만든 연결 코드</label>
+  <input id="code" type="password" autocomplete="off" required placeholder="대시보드 → 실시간 연결 → 코드 만들기">
+  <label for="file-url">지금 열어 둔 파일의 공유 링크</label>
+  <input id="file-url" type="url" required placeholder="Figma 공유 → 링크 복사">
+  <p class="hint">프로젝트에 등록한 파일을 열었는지 확인해 주세요. 일반 플러그인은 현재 파일의 URL을 자동으로 확인할 수 없어 직접 입력해요.</p>
+  <button id="connect" type="submit">연결하고 기준 저장</button>
+</form>
+<section id="connected" hidden>
+  <p id="project"></p>
+  <button id="send" type="button">지금 보내기 / 다시 시도</button>
+  <p class="hint">수정 후 전송 완료를 확인하고 모음에서 새로고침하세요. 처음 연결할 때는 비교 기준만 저장하며, 이후 변경부터 개수가 늘어나요.</p>
+  <p class="hint">여러 편집은 한 변경사항으로 묶어요. 이 창을 닫거나 8시간이 지나면 새 연결 코드가 필요해요.</p>
+</section>
+<p id="status" role="status">모음의 프로젝트 대시보드에서 연결 코드를 만들어 주세요.</p>
+<script>
+const API = 'https://fastapi-practice-jwse.onrender.com';
+const el = id => document.getElementById(id);
+let session;
+let sequence = 0;
+let latest;
+let pending;
+let sending = false;
+
+function status(message, error = false) {
+  el('status').textContent = message;
+  el('status').dataset.error = String(error);
+}
+function editor(message) { parent.postMessage({ pluginMessage: message }, '*'); }
+
+async function request(path, body, token) {
+  const response = await fetch(API + path, {
+    method: 'POST', headers: { 'Content-Type': 'application/json',
+      ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: JSON.stringify(body), signal: AbortSignal.timeout(60000),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(typeof data.detail === 'string' ? data.detail : '전송 요청을 확인해 주세요.');
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+el('pair-form').onsubmit = async event => {
+  event.preventDefault();
+  el('connect').disabled = true;
+  status('모음 프로젝트와 연결 중…');
+  try {
+    const fileUrl = el('file-url').value.trim();
+    const data = await request('/api/figma-plugin/pair', { code: el('code').value.trim(), file_url: fileUrl });
+    session = { token: data.token, fileUrl };
+    sequence = 0;
+    el('code').value = '';
+    el('project').textContent = data.project_name + '에 연결됐어요.';
+    el('pair-form').hidden = true;
+    el('connected').hidden = false;
+    editor({ type: 'start' });
+  } catch (error) {
+    status(error.message || '연결하지 못했어요. 새 연결 코드로 다시 시도해 주세요.', true);
+  } finally { el('connect').disabled = false; }
+};
+
+async function pump() {
+  if (!session || sending || (!latest && !pending)) return;
+  sending = true;
+  if (!pending) {
+    pending = { sequence: ++sequence, file_url: session.fileUrl, ...latest };
+    latest = undefined;
+  }
+  status('변경 내용을 모음으로 전송 중…');
+  let succeeded = false;
+  try {
+    const result = await request('/api/figma-plugin/snapshot', pending, session.token);
+    pending = undefined;
+    succeeded = true;
+    const time = new Intl.DateTimeFormat('ko-KR', { timeStyle: 'medium' }).format(new Date(result.received_at));
+    status(result.baseline ? '기준 저장 완료 · 이제 수정한 내용부터 기록돼요. (' + time + ')'
+      : result.created ? '전송 완료 · 변경사항 1개 추가 (' + time + ')'
+      : '전송 완료 · 추가 변경 없음 (' + time + ')');
+  } catch (error) {
+    status((error.message || '서버에 연결하지 못했어요.') + ' 전송하지 못한 내용은 이 창에 보관돼요. 지금 보내기로 다시 시도하세요.', true);
+    if (error.status === 401) {
+      editor({ type: 'stop' });
+      session = undefined; pending = undefined; latest = undefined;
+      el('pair-form').hidden = false;
+      el('connected').hidden = true;
+    }
+  } finally {
+    sending = false;
+    // Only one request is in flight. An older response can never overwrite newer data.
+    if (succeeded && latest) void pump();
+  }
+}
+
+el('send').onclick = () => {
+  if (pending) void pump();
+  editor({ type: 'capture' });
+};
+window.onmessage = event => {
+  if (event.source !== parent) return;
+  const message = event.data.pluginMessage;
+  if (!message) return;
+  if (message.type === 'file') el('file').textContent = '현재 파일: ' + message.name;
+  else if (message.type === 'loading') status('파일의 모든 페이지를 읽는 중… 큰 파일은 시간이 걸릴 수 있어요.');
+  else if (message.type === 'changed') status('편집 감지 · 입력을 멈추면 약 1초 후 보내요.');
+  else if (message.type === 'capture-error') status(message.message + ' 기존 기록은 유지돼요.', true);
+  else if (message.type === 'snapshot') { latest = message.snapshot; void pump(); }
+};
+</script>
+</html>

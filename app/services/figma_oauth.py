@@ -115,6 +115,8 @@ def token_request(payload, *, refresh=False):
 
 
 def decrypt(account):
+    if not account.figma_user_id:
+        raise HTTPException(409, '기존 Figma 연결을 다시 승인해 주세요.')
     decoder = cipher()
     from cryptography.fernet import InvalidToken
     try:
@@ -204,7 +206,7 @@ def exchange(db, user_id, code, state):
 def refresh_token(db, user_id, *, force=False):
     try:
         account = locked_account(db, user_id)
-        if account is None:
+        if account is None or not account.figma_user_id:
             db.commit()
             return None
         credentials = decrypt(account)
@@ -227,7 +229,7 @@ def refresh_token(db, user_id, *, force=False):
 
 def user_token(db, user_id):
     account = db.get(FigmaAccount, user_id)
-    if account is None:
+    if account is None or not account.figma_user_id:
         return None
     credentials = decrypt(account)
     if account.expires_at > utc_now() + REFRESH_MARGIN:
@@ -237,9 +239,10 @@ def user_token(db, user_id):
 
 def status(db, user_id):
     account = db.get(FigmaAccount, user_id)
-    return {'connected': account is not None,
-            'figma_user_id': account.figma_user_id if account else None,
-            'expires_at': account.expires_at if account else None}
+    connected = account is not None and bool(account.figma_user_id)
+    return {'connected': connected,
+            'figma_user_id': account.figma_user_id if connected else None,
+            'expires_at': account.expires_at if connected else None}
 
 
 def refresh(db, user_id):

@@ -86,6 +86,10 @@ def display(value):
 
 def describe(before, after):
     old, new = flatten(before), flatten(after)
+    return describe_nodes(old, new, before.get('name'), after.get('name'))
+
+
+def describe_nodes(old, new, before_name, after_name, *, prefix=PREFIX, basis=None):
     additions, deletions, edits = [], [], []
     for key, node in new.items():
         if key not in old:
@@ -100,9 +104,9 @@ def describe(before, after):
         if changes:
             edits.append((node['path'], changes))
     deletions = [key for key in old if key not in new]
-    lines = [PREFIX.rstrip(), f'요소 추가 {len(additions)}개 · 삭제 {len(deletions)}개 · 수정 {len(edits)}개']
-    if before.get('name') != after.get('name'):
-        lines.append(f"파일 이름: {display(before.get('name'))} → {display(after.get('name'))}")
+    lines = [prefix.rstrip(), f'요소 추가 {len(additions)}개 · 삭제 {len(deletions)}개 · 수정 {len(edits)}개']
+    if before_name != after_name:
+        lines.append(f"파일 이름: {display(before_name)} → {display(after_name)}")
     entries = []
     for keys, nodes, other, label in ((additions, new, old, '추가'), (deletions, old, new, '삭제')):
         for key in keys:
@@ -113,7 +117,7 @@ def describe(before, after):
     for path, changes in edits:
         entries.append(path + '\n' + '\n'.join(
             f'{label}: {display(previous)} → {display(current)}' for label, previous, current in changes))
-    if not entries and before.get('name') == after.get('name'):
+    if not entries and before_name == after_name:
         lines.append('비교한 텍스트·스타일·크기·위치·구조 속성에서는 차이가 발견되지 않았어요. 이미지 픽셀과 벡터 경로의 변화는 비교하지 않아요.')
     displayed = 0
     for entry in entries[:30]:
@@ -123,8 +127,8 @@ def describe(before, after):
         displayed += 1
     if len(entries) > displayed:
         lines.append('표시 분량을 넘어선 변경 항목은 생략했어요.')
-    lines.append('비교 기준: 이 기록의 직전 저장 버전. 이미지 픽셀·벡터 경로는 비교 대상에서 제외돼요.')
-    return '\n\n'.join(lines).replace(PREFIX.rstrip() + '\n\n', PREFIX, 1)
+    lines.append(basis or '비교 기준: 이 기록의 직전 저장 버전. 이미지 픽셀·벡터 경로는 비교 대상에서 제외돼요.')
+    return '\n\n'.join(lines).replace(prefix.rstrip() + '\n\n', prefix, 1)
 
 
 def enrich(rows, revisions, project, api, db, resource, headers, current=None, has_older=False):

@@ -133,6 +133,34 @@ class FigmaOAuthTests(unittest.TestCase):
         self.assertEqual(error.exception.status_code, 503)
         self.assertFalse(service.status(self.db, self.project.owner_id)['connected'])
 
+    def test_legacy_connection_is_preserved_until_successful_reauthorization(self):
+        account = FigmaAccount(user_id=self.project.owner_id, figma_user_id=None,
+                               credentials='existing-encrypted-credentials',
+                               expires_at=utc_now() + timedelta(hours=1), updated_at=utc_now())
+        self.db.add(account)
+        self.db.commit()
+        # Old ciphertext may use a different envelope/key; do not decrypt or
+        # refresh it, and do not advertise this row as an approved connection.
+        with patch.object(service, 'cipher', side_effect=AssertionError('must not decrypt legacy credentials')):
+            self.assertEqual(service.status(self.db, self.project.owner_id), {
+                'connected': False, 'figma_user_id': None, 'expires_at': None})
+            self.assertIsNone(service.user_token(self.db, self.project.owner_id))
+            with self.assertRaises(HTTPException) as error:
+                external_sync.scoped_token('figma', self.project.owner_id, 'ABC123', self.db)
+            self.assertEqual(error.exception.status_code, 409)
+            with self.assertRaises(HTTPException) as error:
+                service.refresh(self.db, self.project.owner_id)
+            self.assertEqual(error.exception.status_code, 409)
+        self.assertEqual(self.db.get(FigmaAccount, self.project.owner_id).credentials,
+                         'existing-encrypted-credentials')
+        state = self.authorize()
+        with patch.object(service, 'token_request', return_value=self.data()):
+            result = service.exchange(self.db, self.project.owner_id, 'new-code', state)
+        self.assertTrue(result['connected'])
+        self.assertEqual(result['figma_user_id'], self.data()['user_id_string'])
+        self.assertEqual(service.user_token(self.db, self.project.owner_id), 'user-token')
+        self.assertEqual(len(self.db.scalars(select(FigmaAccount)).all()), 1)
+
     def test_two_users_and_different_project_files_use_owner_tokens(self):
         second = User(user_id='two', name='Two', email='two@example.com', password_hash='unused')
         self.db.add(second)

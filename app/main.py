@@ -1,9 +1,10 @@
 from app.routers import project_sync_runs, project_members
-from app.routers import project_github, project_integrations, project_connections, notion_oauth, figma_oauth
+from app.routers import project_github, project_integrations, project_connections, notion_oauth, figma_oauth, figma_plugin
 import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from app.figma_plugin_cors import FigmaPluginCORSMiddleware
 
 from app.routers import auth, password_reset, projects, stories, project_activities
 
@@ -17,12 +18,14 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
     expose_headers=["Content-Disposition"],
 )
+app.add_middleware(FigmaPluginCORSMiddleware)
 app.include_router(projects.router)
 app.include_router(project_members.router)
 app.include_router(project_github.router)
 app.include_router(project_integrations.router)
 app.include_router(notion_oauth.router)
 app.include_router(figma_oauth.router)
+app.include_router(figma_plugin.router)
 app.include_router(project_connections.router)
 app.include_router(project_sync_runs.router)
 app.include_router(stories.router)
