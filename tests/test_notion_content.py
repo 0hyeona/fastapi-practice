@@ -131,3 +131,69 @@ class NotionContentTests(unittest.TestCase):
         with patch.dict('os.environ', {'NOTION_ALLOWED_PAGE_IDS': 'b' * 32}):
             self.assertEqual(self.sync(responses=[page, listing(block(1, 'new')), page])['created'], 0)
         self.assertEqual(len(self.db.scalars(select(ProjectNotionSnapshot)).all()), 2)
+
+    def test_blank_blocks_do_not_create_empty_added_content(self):
+        self.sync(block(1, '원래 문장'))
+        result = self.sync(block(1, '원래 문장'), block(2, ''), block(3, '   '))
+        self.assertEqual(result['created'], 0)
+        self.assertIn(f'{2:032x}', self.snapshot().content['blocks'])
+        self.assertEqual(self.sync(block(1, '원래 문장'), block(2, '새로 작성한 문장'))['created'], 1)
+        row = self.activities()[0]
+        self.assertEqual(row.activity_type, 'content_added')
+        self.assertEqual(row.description, '추가된 내용: 새로 작성한 문장')
+
+    def test_actual_sentence_edit_keeps_exact_before_and_after(self):
+        self.sync(block(1, '전시회 날짜는 11월 20일입니다.'))
+        self.sync(block(1, '전시회 날짜는 11월 21일입니다.'))
+        row = self.activities()[0]
+        self.assertEqual(row.description, '수정 전: 전시회 날짜는 11월 20일입니다.\n수정 후: 전시회 날짜는 11월 21일입니다.')
+
+    def test_clearing_sentence_records_the_deleted_text_not_empty_update(self):
+        self.sync(block(1, '지워질 문장'))
+        self.assertEqual(self.sync(block(1, ''))['created'], 1)
+        row = self.activities()[0]
+        self.assertEqual(row.activity_type, 'content_deleted')
+        self.assertEqual(row.description, '삭제된 내용: 지워질 문장')
+        self.assertEqual(self.sync()['created'], 0)
+
+    def test_missing_rich_text_fails_without_erasing_previous_sentence(self):
+        self.sync(block(1, '보존할 문장'))
+        incomplete = block(1, 'ignored')
+        incomplete['paragraph'].pop('rich_text')
+        with self.assertRaises(HTTPException):
+            self.sync(incomplete)
+        self.assertEqual(self.snapshot().content['blocks'][f'{1:032x}']['text'], '보존할 문장')
+        self.assertEqual(self.activities(), [])
+
+    def test_unsupported_response_preserves_previous_text_and_unknown_is_not_empty(self):
+        self.sync(block(1, '보존할 문장'))
+        unsupported = {'object': 'block', 'id': f'{1:032x}', 'type': 'unsupported',
+                       'has_children': False, 'unsupported': {}}
+        self.assertEqual(self.sync(unsupported)['created'], 0)
+        self.assertEqual(self.snapshot().content['blocks'][f'{1:032x}']['text'], '보존할 문장')
+        self.assertEqual(self.sync(block(1, '새 문장'))['created'], 1)
+        self.assertIn('보존할 문장', self.activities()[0].description)
+
+    def test_media_is_identified_instead_of_claiming_empty_text(self):
+        self.sync()
+        image = {'object': 'block', 'id': f'{1:032x}', 'type': 'image',
+                 'has_children': False, 'image': {'type': 'file', 'caption': [],
+                    'file': {'url': 'https://example.com/image?temporary-secret'}}}
+        self.sync(image)
+        self.assertEqual(self.activities()[0].description, '추가된 내용: [이미지]')
+        self.assertNotIn('temporary-secret', str(self.snapshot().content))
+
+    def test_empty_checkbox_and_table_do_not_create_sentence_changes(self):
+        self.sync()
+        todo = block(1, '', kind='to_do', checked=False)
+        table = block(2, '', kind='table_row', cells=[[], []])
+        self.assertEqual(self.sync(todo, table)['created'], 0)
+        todo['to_do']['checked'] = True
+        self.assertEqual(self.sync(todo, table)['created'], 0)
+
+    def test_equations_and_nested_text_are_collected(self):
+        self.sync()
+        equation = {'object': 'block', 'id': f'{1:032x}', 'type': 'equation',
+                    'has_children': False, 'equation': {'expression': 'x = 1'}}
+        self.assertEqual(self.sync(equation)['created'], 1)
+        self.assertEqual(self.activities()[0].description, '추가된 내용: x = 1')
