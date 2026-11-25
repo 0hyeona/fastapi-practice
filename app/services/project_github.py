@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.models.github_account import GithubAccount
 from app.services.github_credentials import decrypt_token
+from app.services import github_rate_limit
 
 
 def repository_name(url):
@@ -48,6 +49,7 @@ class GitHubClient:
                 self.headers["Authorization"] = f"Bearer {token}"
 
     def get(self, path="", params=None, empty_list=False):
+        github_rate_limit.check(self.headers)
         try:
             with httpx.Client(timeout=15, follow_redirects=False) as client:
                 response = client.get(f"https://api.github.com/repos/{self.repository}{path}",
@@ -66,6 +68,8 @@ class GitHubClient:
         if response.status_code in (403, 429):
             limited = (response.status_code == 429 or response.headers.get("x-ratelimit-remaining") == "0"
                        or "retry-after" in response.headers)
+            if limited:
+                github_rate_limit.record(self.headers, response.headers)
             raise HTTPException(503 if limited else 502,
                                 "GitHub 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요." if limited
                                 else "GitHub 저장소 접근 권한을 확인해주세요.")

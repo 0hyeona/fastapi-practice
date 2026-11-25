@@ -4,6 +4,7 @@ from unittest.mock import patch
 import httpx
 from fastapi import HTTPException
 from app.services.project_github import GitHubClient, repository_name
+from app.services import github_rate_limit
 import test_projects
 
 COMMIT = {"sha": "a" * 40, "html_url": "https://github.com/acme/demo/commit/" + "a" * 40,
@@ -77,6 +78,12 @@ class ProjectGitHubTests(unittest.TestCase):
 
 
 class GitHubClientTests(unittest.TestCase):
+    def setUp(self):
+        github_rate_limit._cooldowns.clear()
+
+    def tearDown(self):
+        github_rate_limit._cooldowns.clear()
+
     def test_repository_validation(self):
         self.assertEqual(repository_name("https://github.com/acme/demo.git"), "acme/demo")
         for url in ("https://github.com.evil/a/b", "http://github.com/a/b", "https://github.com/a/b/tree/main",
@@ -95,10 +102,12 @@ class GitHubClientTests(unittest.TestCase):
         for code, headers, expected in ((404, {}, 404), (401, {}, 502), (500, {}, 502),
                                         (403, {"x-ratelimit-remaining": "0"}, 503),
                                         (429, {}, 503), (301, {}, 502), (422, {}, 422)):
+            github_rate_limit._cooldowns.clear()
             with self.subTest(code=code), patch("httpx.Client.get", return_value=httpx.Response(code, headers=headers)):
                 with self.assertRaises(HTTPException) as error:
                     GitHubClient("acme/demo", 1).get()
                 self.assertEqual(error.exception.status_code, expected)
+        github_rate_limit._cooldowns.clear()
         with patch("httpx.Client.get", return_value=httpx.Response(409, json={"message": "Git Repository is empty."})):
             self.assertEqual(GitHubClient("acme/demo", 1).get("/commits", empty_list=True), ([], False))
         with patch("httpx.Client.get", return_value=httpx.Response(409, json={"message": "Conflict"})):

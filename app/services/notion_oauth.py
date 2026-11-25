@@ -36,12 +36,18 @@ def config():
         parsed.port
         valid = (parsed.hostname and not parsed.username and not parsed.password
                  and not parsed.query and not parsed.fragment
+                 and parsed.path == '/auth/notion/callback'
                  and (parsed.scheme == 'https' or (parsed.scheme == 'http'
                       and parsed.hostname in ('localhost', '127.0.0.1'))))
+        origins = {origin.strip().rstrip('/') for origin in os.getenv('FRONTEND_ORIGINS', '').split(',') if origin.strip()}
+        if origins and f'{parsed.scheme}://{parsed.netloc}' not in origins:
+            valid = False
+        if os.getenv('RENDER') == 'true' and parsed.scheme != 'https':
+            valid = False
     except ValueError:
         valid = False
     if not client_id or not secret or not valid:
-        raise HTTPException(503, 'NOTION_CLIENT_ID, NOTION_CLIENT_SECRET, NOTION_OAUTH_REDIRECT_URI 설정을 확인하세요.')
+        raise HTTPException(503, 'Notion 연결 설정을 확인하세요. NOTION_OAUTH_REDIRECT_URI는 FRONTEND_ORIGINS에 허용한 프론트 주소의 /auth/notion/callback이어야 합니다.')
     return client_id, secret, redirect
 
 

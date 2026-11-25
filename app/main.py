@@ -16,7 +16,7 @@ app.add_middleware(
     ).split(",") if origin.strip()],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", "Retry-After", "X-RateLimit-Reset"],
 )
 app.add_middleware(FigmaPluginCORSMiddleware)
 app.include_router(projects.router)

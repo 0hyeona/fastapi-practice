@@ -25,9 +25,11 @@ class ProjectSharingTests(unittest.TestCase):
         story = self.client.post('/stories', headers=self.headers,
                                  json={'project_id': self.project_id, 'title': 'Shared story', 'content': 'Notes'}).json()
         self.story_url = f"/stories/{story['id']}"
-        activity = self.client.post('/project_activities', headers=self.headers, json={
-            'project_id': self.project_id, 'source': 'notion', 'title': 'Edited',
-            'occurred_at': '2026-11-20T00:00:00Z'}).json()
+        activity_response = self.client.post('/project_activities', headers=self.headers, json={
+            'project_id': self.project_id, 'source': 'github', 'activity_type': 'commit', 'title': 'Edited',
+            'occurred_at': '2026-11-20T00:00:00Z'})
+        self.assertEqual(activity_response.status_code, 201, activity_response.text)
+        activity = activity_response.json()
         self.activity_url = f"/project_activities/{activity['activity_id']}"
 
     def tearDown(self):
@@ -130,7 +132,9 @@ class ProjectSharingTests(unittest.TestCase):
         url = self.base + '/activities?source=notion'
         shared = self.client.get(url, headers=self.member_headers)
         self.assertEqual(shared.json(), self.client.get(url, headers=self.headers).json())
-        self.assertEqual(len(shared.json()), 2)
+        # The first Notion sync is a baseline; only the later edit is an activity.
+        self.assertEqual(len(shared.json()), 1)
+        self.assertEqual(shared.json()[0]['source'], 'notion')
 
     def test_membership_is_explicit_idempotent_and_cascades_with_project(self):
         first = self.add()

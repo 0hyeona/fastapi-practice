@@ -109,6 +109,11 @@ def fetch_json(source, url, headers, params=None):
         retry = response.headers.get('retry-after', '')
         headers = {'Retry-After': retry} if retry.isdigit() else None
         raise HTTPException(429 if source == 'figma' else 503, f'{source} 요청 한도 초과. 잠시 후 재시도하세요.', headers=headers)
+    if source == 'notion' and response.status_code == 401:
+        raise HTTPException(409, 'Notion 인증이 만료되었거나 취소됐습니다. Notion 계정을 다시 연결해 주세요.')
+    if source == 'notion' and response.status_code in (403, 404):
+        raise HTTPException(403 if response.status_code == 403 else 404,
+                            'Notion 페이지 접근 권한이 없거나 페이지를 찾을 수 없습니다. 설정에서 Notion 페이지 권한 다시 선택을 눌러 프로젝트에 등록한 페이지를 승인하세요.')
     if response.status_code in (401, 403):
         raise HTTPException(502, f'{source} 토큰·읽기 권한·페이지 공유 설정을 확인하세요.')
     if response.status_code == 404:

@@ -93,6 +93,23 @@ class NotionOAuthTests(unittest.TestCase):
             service.exchange(self.db, self.project.owner_id, 'code', state)
         token.assert_not_called()
 
+    def test_redirect_must_match_frontend_callback_and_allowed_origin(self):
+        canonical = 'https://moeum-log.vercel.app/auth/notion/callback'
+        with patch.dict(os.environ, {'FRONTEND_ORIGINS': 'https://moeum-log.vercel.app,http://localhost:5173',
+                                    'NOTION_OAUTH_REDIRECT_URI': canonical, 'RENDER': 'true'}):
+            self.assertEqual(service.config()[2], canonical)
+            for invalid in ('http://localhost:5173/auth/notion/callback',
+                            'https://other.example/auth/notion/callback',
+                            'https://moeum-log.vercel.app/', canonical + '?next=other', canonical + '#fragment'):
+                with self.subTest(redirect=invalid), patch.dict(os.environ, {'NOTION_OAUTH_REDIRECT_URI': invalid}):
+                    with self.assertRaises(HTTPException) as error:
+                        service.config()
+                    self.assertEqual(error.exception.status_code, 503)
+
+    def test_local_callback_remains_available_for_local_development(self):
+        with patch.dict(os.environ, {'FRONTEND_ORIGINS': 'http://localhost:5173', 'RENDER': ''}):
+            self.assertEqual(service.config()[2], 'http://localhost:5173/auth/notion/callback')
+
     def test_failed_exchange_preserves_previous_connection(self):
         service.store(self.db, self.project.owner_id, self.data('old-token'))
         state = self.authorize()

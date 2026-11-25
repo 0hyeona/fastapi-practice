@@ -159,6 +159,13 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(self.db.scalar(select(func.count()).select_from(ProjectActivity)),0)
 
     def test_http_errors_and_safe_headers(self):
+        for code, expected, instruction in [(401, 409, '다시 연결'), (403, 403, '페이지 권한 다시 선택'), (404, 404, '페이지 권한 다시 선택')]:
+            with patch('httpx.Client.get', return_value=httpx.Response(code, text='private-token')):
+                with self.assertRaises(HTTPException) as error:
+                    service.fetch_json('notion', 'https://api.notion.com/v1/pages/' + PAGE, {})
+            self.assertEqual(error.exception.status_code, expected)
+            self.assertIn(instruction, error.exception.detail)
+            self.assertNotIn('private-token', error.exception.detail)
         for code,expected in [(401,502),(403,502),(404,404),(429,429),(500,502),(302,502)]:
             with patch('httpx.Client.get',return_value=httpx.Response(code,headers={'Retry-After':'30'},text='private-token')):
                 with self.assertRaises(HTTPException) as e:
