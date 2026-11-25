@@ -124,10 +124,16 @@ class ProjectContentTests(unittest.TestCase):
             self.assertEqual(response.status_code, 422)
 
     def test_story_analysis_save_and_export(self):
+        notion_url = 'https://www.notion.so/' + 'a' * 32
+        with Session(self.engine) as db:
+            from app.models.project import Project
+            db.get(Project, self.project_id).notion_url = notion_url
+            db.commit()
         ids = []
         for source in ('github', 'figma', 'notion'):
             row = self.client.post('/project_activities', headers=self.headers,
-                                   json={**self.activity, 'source': source, 'description': source + ' evidence'}).json()
+                                   json={**self.activity, 'source': source, 'description': source + ' evidence',
+                                         'source_url': notion_url if source == 'notion' else None}).json()
             ids.append(row['activity_id'])
         with patch.dict('os.environ', {'OPENAI_API_KEY': ''}), patch('httpx.post') as provider:
             response = self.client.post('/stories/analyze', headers=self.headers,

@@ -1,4 +1,5 @@
 """Read GitHub data without storing commits or branches in MySQL."""
+import base64
 import os
 import re
 from urllib.parse import urlsplit
@@ -8,7 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from app.models.github_account import GithubAccount
 from app.services.github_credentials import decrypt_token
-from app.services import github_rate_limit
+from app.services import github_cache, github_rate_limit
 
 
 def repository_name(url):
@@ -47,17 +48,36 @@ class GitHubClient:
             token = os.getenv("GITHUB_TOKEN", "").strip()
             if token:
                 self.headers["Authorization"] = f"Bearer {token}"
+        if 'Authorization' not in self.headers:
+            # OAuth app credentials are permitted by GitHub for public data only.
+            # Personal credentials above remain required for private repositories.
+            client_id = os.getenv('GITHUB_CLIENT_ID', '').strip()
+            secret = os.getenv('GITHUB_CLIENT_SECRET', '').strip()
+            if client_id and secret:
+                encoded = base64.b64encode(f'{client_id}:{secret}'.encode()).decode()
+                self.headers['Authorization'] = 'Basic ' + encoded
 
     def get(self, path="", params=None, empty_list=False):
+        cache_key = github_cache.key(self.headers, self.repository, path, params)
+        cached = github_cache.lookup(cache_key)
+        if cached and cached.fresh():
+            return cached.result()
         github_rate_limit.check(self.headers)
+        headers = dict(self.headers)
+        if cached and cached.etag:
+            headers['If-None-Match'] = cached.etag
         try:
             with httpx.Client(timeout=15, follow_redirects=False) as client:
                 response = client.get(f"https://api.github.com/repos/{self.repository}{path}",
-                                      headers=self.headers, params=params)
+                                      headers=headers, params=params)
         except httpx.TimeoutException as exc:
             raise HTTPException(504, "GitHub 응답 시간이 초과되었습니다.") from exc
         except httpx.RequestError as exc:
             raise HTTPException(502, "GitHub에 연결할 수 없습니다.") from exc
+        if response.status_code == 304 and cached:
+            data, has_next = cached.result()
+            github_cache.save(cache_key, data, has_next, response.headers.get('etag', cached.etag))
+            return data, has_next
         if response.status_code == 409 and empty_list:
             try:
                 is_empty = "empty" in response.json().get("message", "").lower()
@@ -84,7 +104,9 @@ class GitHubClient:
         if response.status_code != 200:
             raise HTTPException(502, "GitHub 조회에 실패했습니다. 저장소 주소를 확인해주세요.")
         try:
-            return response.json(), "next" in response.links
+            data, has_next = response.json(), "next" in response.links
+            github_cache.save(cache_key, data, has_next, response.headers.get('etag'))
+            return data, has_next
         except ValueError as exc:
             raise HTTPException(502, "GitHub 응답을 읽을 수 없습니다.") from exc
 

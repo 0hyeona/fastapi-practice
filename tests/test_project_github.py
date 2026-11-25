@@ -4,7 +4,7 @@ from unittest.mock import patch
 import httpx
 from fastapi import HTTPException
 from app.services.project_github import GitHubClient, repository_name
-from app.services import github_rate_limit
+from app.services import github_cache, github_rate_limit
 import test_projects
 
 COMMIT = {"sha": "a" * 40, "html_url": "https://github.com/acme/demo/commit/" + "a" * 40,
@@ -80,9 +80,11 @@ class ProjectGitHubTests(unittest.TestCase):
 class GitHubClientTests(unittest.TestCase):
     def setUp(self):
         github_rate_limit._cooldowns.clear()
+        github_cache._entries.clear()
 
     def tearDown(self):
         github_rate_limit._cooldowns.clear()
+        github_cache._entries.clear()
 
     def test_repository_validation(self):
         self.assertEqual(repository_name("https://github.com/acme/demo.git"), "acme/demo")
@@ -92,7 +94,7 @@ class GitHubClientTests(unittest.TestCase):
                 repository_name(url)
 
     def test_token_is_scoped_to_owner_and_repository(self):
-        with patch.dict(os.environ, {"GITHUB_TOKEN": "secret", "GITHUB_TOKEN_OWNER_ID": "7",
+        with patch.dict(os.environ, {"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": "", "GITHUB_TOKEN": "secret", "GITHUB_TOKEN_OWNER_ID": "7",
                                      "GITHUB_ALLOWED_REPOSITORIES": "acme/demo"}):
             self.assertIn("Authorization", GitHubClient("acme/demo", 7).headers)
             self.assertNotIn("Authorization", GitHubClient("acme/demo", 8).headers)
