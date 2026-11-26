@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -21,6 +22,8 @@ class PluginStatus(BaseModel):
     connected: bool
     expires_at: datetime | None
     last_received_at: datetime | None
+    last_seen_at: datetime | None = None
+    collection_state: str = 'offline'
 
 
 class PairRequest(BaseModel):
@@ -35,6 +38,22 @@ class SnapshotRequest(BaseModel):
     file_url: str = Field(min_length=1, max_length=2048)
     name: str = Field(max_length=255)
     document: dict
+
+
+class DeltaRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    sequence: int = Field(strict=True, ge=1, le=2147483647)
+    file_url: str = Field(min_length=1, max_length=2048)
+    name: str = Field(max_length=255)
+    base_revision: int = Field(strict=True, ge=0)
+    upserts: list[dict] = Field(max_length=100000)
+    deleted: list[str] = Field(max_length=100000)
+
+
+class ResumeRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    file_url: str = Field(min_length=1, max_length=2048)
+    state: Literal['collecting', 'sending', 'error', 'paused'] = 'collecting'
 
 
 def no_store(response):
@@ -105,3 +124,30 @@ async def snapshot(request: Request, response: Response, credentials: HTTPAuthor
     body = await bounded_body(request, service.MAX_BODY_BYTES)
     media_type = request.headers.get('content-type', '').split(';', 1)[0].strip().lower()
     return await run_in_threadpool(receive_body, db, credentials.credentials, body, media_type == 'application/gzip')
+
+
+@router.post('/api/figma-plugin/resume', summary='저장한 플러그인 인증 재사용 및 상태 알림')
+async def resume(request: Request, response: Response, credentials=Depends(bearer), db: Session = Depends(get_db)):
+    no_store(response)
+    if credentials is None:
+        raise HTTPException(401, '플러그인 연결이 필요합니다.')
+    data = await bounded_json(request, ResumeRequest, 8192)
+    return await run_in_threadpool(service.resume, db, credentials.credentials, data.file_url, data.state)
+
+
+def receive_delta(db, token, raw, compressed):
+    if compressed:
+        raw = service.decode_upload(db, token, raw)
+    data = parse_payload(raw, DeltaRequest)
+    return service.receive(db, token, data.sequence, data.file_url, data.name, None,
+                           delta={'upserts': data.upserts, 'deleted': data.deleted}, base_revision=data.base_revision)
+
+
+@router.post('/api/figma-plugin/changes', summary='변경된 요소만 배치 전송')
+async def changes(request: Request, response: Response, credentials=Depends(bearer), db: Session = Depends(get_db)):
+    no_store(response)
+    if credentials is None:
+        raise HTTPException(401, '플러그인 연결이 필요합니다.')
+    raw = await bounded_body(request, service.MAX_BODY_BYTES)
+    return await run_in_threadpool(receive_delta, db, credentials.credentials, raw,
+                                  request.headers.get('content-type', '').split(';')[0].strip().lower() == 'application/gzip')

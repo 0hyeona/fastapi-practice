@@ -32,20 +32,13 @@ def normalize(value):
     return value
 
 
-<<<<<<< HEAD
 def flatten(data, *, max_path_bytes=None):
-=======
-def flatten(data):
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
     """Compare own properties; moving a frame must not move every child again."""
     root = data['document']
     if not isinstance(root, dict) or root.get('type') != 'DOCUMENT':
         raise ValueError('Invalid document')
     nodes = {}
-<<<<<<< HEAD
     path_bytes = 0
-=======
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
     stack = [(root, None, '', None)]
     while stack:
         node, parent, path, parent_box = stack.pop()
@@ -53,13 +46,10 @@ def flatten(data):
         if not isinstance(key, str) or key in nodes or len(nodes) >= 100000:
             raise ValueError('Invalid or oversized document')
         path = (path + ' / ' + node.get('name', node['type'])).strip(' /')
-<<<<<<< HEAD
         if max_path_bytes is not None:
             path_bytes += len(path.encode('utf-8'))
             if path_bytes > max_path_bytes:
                 raise OverflowError('Figma snapshot paths exceed the comparison budget')
-=======
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
         props = {name: node[name] for name in FIELDS if name in node}
         props['parent'] = parent
         box = node.get('absoluteBoundingBox')
@@ -101,13 +91,10 @@ def display(value):
 
 def describe(before, after):
     old, new = flatten(before), flatten(after)
-<<<<<<< HEAD
     return describe_nodes(old, new, before.get('name'), after.get('name'))
 
 
 def describe_nodes(old, new, before_name, after_name, *, prefix=PREFIX, basis=None):
-=======
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
     additions, deletions, edits = [], [], []
     for key, node in new.items():
         if key not in old:
@@ -122,15 +109,9 @@ def describe_nodes(old, new, before_name, after_name, *, prefix=PREFIX, basis=No
         if changes:
             edits.append((node['path'], changes))
     deletions = [key for key in old if key not in new]
-<<<<<<< HEAD
     lines = [prefix.rstrip(), f'요소 추가 {len(additions)}개 · 삭제 {len(deletions)}개 · 수정 {len(edits)}개']
     if before_name != after_name:
         lines.append(f"파일 이름: {display(before_name)} → {display(after_name)}")
-=======
-    lines = [PREFIX.rstrip(), f'요소 추가 {len(additions)}개 · 삭제 {len(deletions)}개 · 수정 {len(edits)}개']
-    if before.get('name') != after.get('name'):
-        lines.append(f"파일 이름: {display(before.get('name'))} → {display(after.get('name'))}")
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
     entries = []
     for keys, nodes, other, label in ((additions, new, old, '추가'), (deletions, old, new, '삭제')):
         for key in keys:
@@ -141,11 +122,7 @@ def describe_nodes(old, new, before_name, after_name, *, prefix=PREFIX, basis=No
     for path, changes in edits:
         entries.append(path + '\n' + '\n'.join(
             f'{label}: {display(previous)} → {display(current)}' for label, previous, current in changes))
-<<<<<<< HEAD
     if not entries and before_name == after_name:
-=======
-    if not entries and before.get('name') == after.get('name'):
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
         lines.append('비교한 텍스트·스타일·크기·위치·구조 속성에서는 차이가 발견되지 않았어요. 이미지 픽셀과 벡터 경로의 변화는 비교하지 않아요.')
     displayed = 0
     for entry in entries[:30]:
@@ -155,13 +132,8 @@ def describe_nodes(old, new, before_name, after_name, *, prefix=PREFIX, basis=No
         displayed += 1
     if len(entries) > displayed:
         lines.append('표시 분량을 넘어선 변경 항목은 생략했어요.')
-<<<<<<< HEAD
     lines.append(basis or '비교 기준: 이 기록의 직전 저장 버전. 이미지 픽셀·벡터 경로는 비교 대상에서 제외돼요.')
     return '\n\n'.join(lines).replace(prefix.rstrip() + '\n\n', prefix, 1)
-=======
-    lines.append('비교 기준: 이 기록의 직전 저장 버전. 이미지 픽셀·벡터 경로는 비교 대상에서 제외돼요.')
-    return '\n\n'.join(lines).replace(PREFIX.rstrip() + '\n\n', PREFIX, 1)
->>>>>>> 7da31e5 (fix: Notion OAuth 인증 오류 및 배포 환경 연결 설정 개선)
 
 
 def enrich(rows, revisions, project, api, db, resource, headers, current=None, has_older=False):

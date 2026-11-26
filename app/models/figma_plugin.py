@@ -20,6 +20,8 @@ class FigmaPluginConnection(Base):
     expires_at = Column(DateTime, nullable=True)
     last_sequence = Column(Integer, nullable=False, default=0)
     last_received_at = Column(DateTime, nullable=True)
+    last_seen_at = Column(DateTime, nullable=True)
+    collection_state = Column(String(24), nullable=True)
 
 
 class ProjectFigmaSnapshot(Base):

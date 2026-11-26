@@ -1,171 +1,177 @@
 <!doctype html>
-<html lang="ko">
-<meta charset="utf-8">
+<html lang="ko"><meta charset="utf-8">
 <style>
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 20px; font: 13px/1.6 Inter, system-ui, sans-serif; color: var(--figma-color-text, #202332); background: var(--figma-color-bg, #fff); }
-  h1 { font-size: 19px; margin: 0 0 8px; } p { margin: 8px 0; }
-  label { display: block; font-weight: 600; margin-top: 14px; }
-  input { width: 100%; padding: 10px; margin-top: 5px; border: 1px solid #aab2c4; border-radius: 6px; }
-  button { padding: 10px 16px; margin-top: 14px; border: 0; border-radius: 7px; background: #587aff; color: white; cursor: pointer; }
-  button:disabled { opacity: .55; cursor: wait; }
-  .hint { font-size: 12px; color: var(--figma-color-text-secondary, #626a7b); }
-  #status { padding: 12px; margin-top: 18px; border-radius: 8px; background: var(--figma-color-bg-secondary, #f3f5fc); overflow-wrap: anywhere; }
-  #status[data-error="true"] { color: #cc3434; }
-  [hidden] { display: none !important; }
+*{box-sizing:border-box}body{margin:0;padding:20px;font:13px/1.6 Inter,system-ui,sans-serif;color:var(--figma-color-text,#202332);background:var(--figma-color-bg,#fff)}h1{font-size:19px;margin:0 0 8px}p{margin:8px 0}label{display:block;font-weight:600;margin-top:14px}input{width:100%;padding:10px;margin-top:5px;border:1px solid #aab2c4;border-radius:6px}button{padding:10px 16px;margin-top:14px;border:0;border-radius:7px;background:#587aff;color:white;cursor:pointer}button:disabled{opacity:.55}.secondary{background:transparent;color:inherit;border:1px solid #aab2c4}.hint{font-size:12px;color:var(--figma-color-text-secondary,#626a7b)}#status{padding:12px;margin-top:18px;border-radius:8px;background:var(--figma-color-bg-secondary,#f3f5fc);overflow-wrap:anywhere}#status[data-error=true]{color:#cc3434}[hidden]{display:none!important}
 </style>
-<h1>모음 실시간 연결</h1>
-<p>이 창을 켜두면 편집한 내용을 모음으로 보내요.</p>
-<p class="hint" id="file"></p>
-<form id="pair-form">
-  <label for="code">모음에서 만든 연결 코드</label>
-  <input id="code" type="password" autocomplete="off" required placeholder="대시보드 → 실시간 연결 → 코드 만들기">
-  <label for="file-url">지금 열어 둔 파일의 공유 링크</label>
-  <input id="file-url" type="url" required placeholder="Figma 공유 → 링크 복사">
-  <p class="hint">프로젝트에 등록한 파일을 열었는지 확인해 주세요. 일반 플러그인은 현재 파일의 URL을 자동으로 확인할 수 없어 직접 입력해요.</p>
-  <button id="connect" type="submit">연결하고 기준 저장</button>
-</form>
-<section id="connected" hidden>
-  <p id="project"></p>
-  <button id="send" type="button">지금 보내기 / 다시 시도</button>
-  <p class="hint">수정 후 전송 완료를 확인하고 모음에서 새로고침하세요. 처음 연결할 때는 비교 기준만 저장하며, 이후 변경부터 개수가 늘어나요.</p>
-  <p class="hint">여러 편집은 한 변경사항으로 묶어요. 이 창을 닫거나 8시간이 지나면 새 연결 코드가 필요해요.</p>
-</section>
-<p id="status" role="status">모음의 프로젝트 대시보드에서 연결 코드를 만들어 주세요.</p>
+<h1>모음 자동 수집</h1><p>플러그인을 켜두면 변경사항을 자동으로 기록해요.</p><p class="hint" id="file"></p>
+<form id="pair-form" hidden><label for="code">최초 연결 코드</label><input id="code" type="password" autocomplete="off" required>
+<label for="file-url">현재 Figma 파일 공유 링크</label><input id="file-url" type="url" required placeholder="https://www.figma.com/design/…">
+<p class="hint">현재 열린 파일의 링크를 입력해 주세요. 인증 정보는 이 기기에만 저장돼요.</p><button id="connect">연결하고 자동 수집</button></form>
+<section id="connected" hidden><p id="project"></p><p id="last" class="hint"></p><button id="send" type="button" class="secondary">지금 다시 시도</button> <button id="forget" type="button" class="secondary">이 기기 연결 지우기</button>
+<p class="hint">약 5초마다 변경된 요소를 전송해요. 웹사이트를 닫아도 수집해요. 플러그인을 닫으면 수집이 멈추고, 다시 실행하면 마지막 저장 상태와 비교해요.</p></section>
+<p id="status" role="status">저장된 연결 확인 중…</p>
 <script>
 const API = 'https://fastapi-practice-jwse.onrender.com';
 const el = id => document.getElementById(id);
-let session;
-let sequence = 0;
-let latest;
-let pending;
-let sending = false;
-
-function status(message, error = false) {
-  el('status').textContent = message;
-  el('status').dataset.error = String(error);
-}
+let session, pending, fileKey, sending = false, captureWaiting = false, running = false;
+let retryTimer, failures = 0, state = 'collecting', persisting = 0, blocked = false;
+let needsCapture = false;
+const saves = new Map();
 function editor(message) { parent.postMessage({ pluginMessage: message }, '*'); }
-
-async function request(path, body, token) {
-  let payload = JSON.stringify(body);
-  let contentType = 'application/json';
-  if (token && payload.length > 64 * 1024) {
-    const raw = new Blob([payload]);
-    const mib = 1024 * 1024;
-    const showSize = bytes => (bytes / mib).toFixed(1) + ' MiB';
-    if (raw.size > 32 * mib) {
-      throw Object.assign(new Error('디자인 데이터가 ' + showSize(raw.size) + '로 압축 전 한도 32 MiB를 초과했어요.'), { status: 413 });
-    }
-    if (typeof CompressionStream === 'function') {
-      payload = await new Response(raw.stream().pipeThrough(new CompressionStream('gzip'))).blob();
-      contentType = 'application/gzip';
-      if (payload.size > 4 * mib) {
-        throw Object.assign(new Error('압축 후 ' + showSize(payload.size) + '로 전송 한도 4 MiB를 초과했어요.'), { status: 413 });
-      }
-    } else if (raw.size > 4 * mib) {
-      throw Object.assign(new Error('이 버전의 Figma는 대용량 전송에 필요한 압축을 지원하지 않아요. Figma Desktop을 업데이트해 주세요.'), { status: 413 });
-    }
-  }
-  const response = await fetch(API + path, {
-    method: 'POST', headers: { 'Content-Type': contentType,
-      ...(token ? { Authorization: 'Bearer ' + token } : {}) },
-    body: payload, signal: AbortSignal.timeout(60000),
+function status(message, error = false) { el('status').textContent = message; el('status').dataset.error = String(error); }
+function persist() {
+  const requestId = ++persisting;
+  // Large full snapshots can be reconstructed on restart. Never exceed clientStorage's 5MB quota.
+  const durable = pending && pending.path === '/changes' && JSON.stringify(pending).length < 500000 ? pending : null;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { saves.delete(requestId); reject(new Error('연결 정보 저장 시간이 초과됐어요.')); }, 10000);
+    saves.set(requestId, { resolve, reject, timer });
+    editor({ type: 'persist', requestId, stored: session ? { session, pending: durable } : null });
   });
-  const data = await response.json();
-  if (!response.ok) {
-    const error = new Error(typeof data.detail === 'string' ? data.detail : '전송 요청을 확인해 주세요.');
-    error.status = response.status;
-    throw error;
+}
+async function request(path, body, token) {
+  let payload = JSON.stringify(body), contentType = 'application/json';
+  const raw = new Blob([payload]);
+  if (raw.size > 32 * 1024 * 1024) throw Object.assign(new Error('디자인 데이터가 32 MiB를 초과했어요.'), { status: 413 });
+  if (token && raw.size > 64 * 1024 && typeof CompressionStream === 'function') {
+    payload = await new Response(raw.stream().pipeThrough(new CompressionStream('gzip'))).blob(); contentType = 'application/gzip';
   }
+  if ((payload.size || raw.size) > 4 * 1024 * 1024) throw Object.assign(new Error('전송 데이터가 4 MiB를 초과했어요.'), { status: 413 });
+  const response = await fetch(API + '/api/figma-plugin' + path, { method: 'POST', headers: { 'Content-Type': contentType,
+    ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: payload, signal: AbortSignal.timeout(60000) });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw Object.assign(new Error(typeof data.detail === 'string' ? data.detail : '서버 응답을 확인해 주세요.'), { status: response.status });
   return data;
 }
-
-el('pair-form').onsubmit = async event => {
-  event.preventDefault();
-  el('connect').disabled = true;
-  status('모음 프로젝트와 연결 중…');
-  try {
-    const fileUrl = el('file-url').value.trim();
-    const data = await request('/api/figma-plugin/pair', { code: el('code').value.trim(), file_url: fileUrl });
-    session = { token: data.token, fileUrl };
-    sequence = 0;
-    el('code').value = '';
-    el('project').textContent = data.project_name + '에 연결됐어요.';
-    el('pair-form').hidden = true;
-    el('connected').hidden = false;
-    status('연결 코드 승인 완료 · Figma의 파일 정보를 기다리는 중…');
-    editor({ type: 'start' });
-  } catch (error) {
-    status(error.message || '연결하지 못했어요. 새 연결 코드로 다시 시도해 주세요.', true);
-  } finally { el('connect').disabled = false; }
-};
-
-async function pump() {
-  if (!session || sending || (!latest && !pending)) return;
-  sending = true;
-  if (!pending) {
-    pending = { sequence: ++sequence, file_url: session.fileUrl, ...latest };
-    latest = undefined;
-  }
-  status('변경 내용을 모음으로 전송 중…');
-  let nextAllowed = false;
-  try {
-    const result = await request('/api/figma-plugin/snapshot', pending, session.token);
-    pending = undefined;
-    nextAllowed = true;
-    const time = new Intl.DateTimeFormat('ko-KR', { timeStyle: 'medium' }).format(new Date(result.received_at));
-    status(result.baseline ? '기준 저장 완료 · 이제 수정한 내용부터 기록돼요. (' + time + ')'
-      : result.created ? '전송 완료 · 변경사항 1개 추가 (' + time + ')'
-      : '전송 완료 · 추가 변경 없음 (' + time + ')');
-  } catch (error) {
-    if (error.status === 413) {
-      // Every capture is a complete file. A later, smaller capture can replace this rejected one.
-      pending = undefined;
-      nextAllowed = true;
-      status(error.message + ' 기존 기록은 유지돼요.', true);
-    } else {
-      status((error.message || '서버에 연결하지 못했어요.') + ' 전송하지 못한 내용은 이 창에 보관돼요. 지금 보내기로 다시 시도하세요.', true);
-    }
-    if (error.status === 401) {
-      editor({ type: 'stop' });
-      session = undefined; pending = undefined; latest = undefined;
-      el('pair-form').hidden = false;
-      el('connected').hidden = true;
-    }
-  } finally {
-    sending = false;
-    // Only one request is in flight. An older response can never overwrite newer data.
-    if (nextAllowed && latest) void pump();
-  }
+function verifyFile(url) {
+  const parsed = new URL(url);
+  const match = parsed.pathname.match(/^\/(?:design|file)\/([a-zA-Z0-9]+)/);
+  if (!['www.figma.com', 'figma.com'].includes(parsed.hostname) || !match || (fileKey && fileKey !== match[1]))
+    throw new Error('현재 열린 Figma 파일의 공유 링크를 입력하세요.');
 }
-
+function showConnected() {
+  el('pair-form').hidden = true; el('connected').hidden = false;
+  el('project').textContent = session.projectName + ' · 연결됨';
+}
+function retry(error) {
+  state = 'error'; captureWaiting = false;
+  if (error.status === 401) {
+    blocked = true; running = false; editor({ type: 'stop' });
+    el('pair-form').hidden = false;
+    status('연결이 만료되거나 해제됐어요. 모음에서 새 코드로 다시 연결하세요.', true); return;
+  }
+  if ([413, 422, 404].includes(error.status)) {
+    blocked = true; needsCapture = true; status(error.message + ' 파일 크기와 서버 버전을 확인하고 다시 시도하세요.', true); return;
+  }
+  const delay = Math.min(30000, 1000 * 2 ** Math.min(failures++, 5)) + Math.random() * 500;
+  status((error.message || '네트워크 연결 실패') + ' · 자동 재시도 대기 중', true);
+  clearTimeout(retryTimer); retryTimer = setTimeout(() => { if (!running) void connectStored(); else void pump(); }, delay);
+}
+async function connectStored() {
+  if (!session || sending || blocked) return;
+  sending = true;
+  try {
+    verifyFile(session.fileUrl);
+    const result = await request('/resume', { file_url: session.fileUrl, state: 'collecting' }, session.token);
+    session.sequence = Math.max(session.sequence || 0, result.last_sequence);
+    session.revision = result.revision;
+    if (pending && pending.body.sequence <= result.last_sequence) pending = undefined;
+    await persist(); showConnected(); failures = 0; running = true;
+    status('자동 연결 완료 · 누락된 최종 상태 비교 중…');
+    // Replay a durable failed batch first; then compare the current complete file.
+    if (!pending) { captureWaiting = true; editor({ type: 'start' }); }
+  } catch (error) { retry(error); }
+  finally { sending = false; }
+  if (running && pending) await pump(true);
+}
+el('pair-form').onsubmit = async event => {
+  event.preventDefault(); if (sending) return;
+  let paired = false;
+  el('connect').disabled = true; sending = true;
+  status('프로젝트 연결을 확인하고 있어요…');
+  try {
+    const fileUrl = el('file-url').value.trim(); verifyFile(fileUrl);
+    const data = await request('/pair', { code: el('code').value.trim(), file_url: fileUrl });
+    session = { token: data.token, fileUrl, projectName: data.project_name, sequence: 0, revision: 0 };
+    pending = undefined; blocked = false; await persist(); el('code').value = ''; showConnected(); paired = true;
+  } catch (error) { status(error.message, true); }
+  finally { sending = false; el('connect').disabled = false; }
+  if (paired) void connectStored();
+};
+async function pump(replay = false) {
+  if (!session || sending || blocked || !running) return;
+  if (!pending) {
+    if (!captureWaiting) { captureWaiting = true; editor({ type: 'delta' }); } return;
+  }
+  sending = true; state = 'sending'; status('변경사항 전송 중…');
+  const batch = pending;
+  try {
+    await persist();
+    await request('/resume', { file_url: session.fileUrl, state: 'sending' }, session.token);
+    const result = await request(pending.path, pending.body, session.token);
+    session.revision = result.revision; session.sequence = Math.max(session.sequence, result.last_sequence || 0);
+    pending = undefined; failures = 0; state = 'collecting'; await persist();
+    const time = new Date(result.received_at).toLocaleTimeString('ko-KR');
+    el('last').textContent = '마지막 수집: ' + time;
+    status(result.baseline ? '자동 수집 중 · 첫 비교 기준 저장 완료' : '자동 수집 중 · 저장 완료 (' + time + ')');
+    if (replay) { captureWaiting = true; editor({ type: 'start' }); }
+  } catch (error) {
+    if (error.status === 409) {
+      pending = undefined; captureWaiting = true; editor({ type: replay ? 'start' : 'capture' });
+      status('비교 기준이 변경되어 최종 상태를 다시 비교해요.');
+    } else { pending = batch; retry(error); }
+  } finally { sending = false; }
+}
 el('send').onclick = () => {
-  if (pending) void pump();
-  editor({ type: 'capture' });
+  if (sending) return;
+  clearTimeout(retryTimer); blocked = false;
+  if (!running) void connectStored();
+  else if (needsCapture) { needsCapture = false; pending = undefined; captureWaiting = true; editor({ type: 'capture' }); }
+  else void pump();
+};
+el('forget').onclick = async () => {
+  if (sending) return;
+  running = false; blocked = true; clearTimeout(retryTimer); editor({ type: 'stop' });
+  session = undefined; pending = undefined;
+  try { await persist(); el('connected').hidden = true; el('pair-form').hidden = false; status('이 기기의 연결 정보를 지웠어요. 서버 연결 해제는 모음에서 할 수 있어요.'); }
+  catch (error) { status(error.message, true); }
 };
 function isEditorMessage(event) {
   if (event.source === parent) return true;
   if (!event.source || event.origin !== 'https://www.figma.com') return false;
-
-  // Figma Desktop can host this UI inside several nested frames.
   let frame = parent;
-  while (frame !== frame.parent) {
-    frame = frame.parent;
-    if (event.source === frame) return true;
-  }
+  while (frame !== frame.parent) { frame = frame.parent; if (event.source === frame) return true; }
   return false;
 }
-
 window.onmessage = event => {
   if (!isEditorMessage(event)) return;
-  const message = event.data?.pluginMessage;
-  if (!message || typeof message !== 'object') return;
-  if (message.type === 'file') el('file').textContent = '현재 파일: ' + message.name;
-  else if (message.type === 'loading') status('파일의 모든 페이지를 읽는 중… 큰 파일은 시간이 걸릴 수 있어요.');
-  else if (message.type === 'changed') status('편집 감지 · 입력을 멈추면 약 1초 후 보내요.');
-  else if (message.type === 'capture-error') status(message.message.replace(/\s*기존 (변경사항|기록)은 유지돼요\.$/, '') + ' 기존 기록은 유지돼요.', true);
-  else if (message.type === 'snapshot') { latest = message.snapshot; void pump(); }
+  const message = event.data?.pluginMessage; if (!message) return;
+  if (message.type === 'persisted') {
+    const save = saves.get(message.requestId); if (!save) return;
+    clearTimeout(save.timer); saves.delete(message.requestId); message.error ? save.reject(new Error(message.error)) : save.resolve();
+  } else if (message.type === 'restored') {
+    fileKey = message.fileKey; el('file').textContent = '현재 파일: ' + message.name;
+    session = message.stored?.session; pending = message.stored?.pending;
+    if (session) { showConnected(); void connectStored(); }
+    else { el('pair-form').hidden = false; status('최초 한 번만 연결 코드와 파일 링크를 입력하세요.'); }
+  } else if (message.type === 'loading') status('실행 시 전체 파일을 한 번 읽어 누락된 최종 상태를 비교해요…');
+  else if (message.type === 'changed' && state !== 'error' && !sending) status('자동 수집 중 · 다음 5초 배치에 전송해요.');
+  else if (message.type === 'capture-error') { captureWaiting = false; needsCapture = true; state = 'error'; status(message.message, true); }
+  else if (message.type === 'idle') captureWaiting = false;
+  else if (message.type === 'snapshot' || message.type === 'delta') {
+    captureWaiting = false; if (!session || pending) return;
+    const full = message.type === 'snapshot';
+    pending = { path: full ? '/snapshot' : '/changes', body: { sequence: ++session.sequence,
+      file_url: session.fileUrl, ...(full ? message.snapshot : { ...message.delta, base_revision: session.revision }) } };
+    void pump();
+  }
 };
-</script>
-</html>
+setInterval(() => { if (!retryTimer || state !== 'error') void pump(); }, 5000);
+setInterval(async () => {
+  if (!session || !running || blocked) return;
+  try { await request('/resume', { file_url: session.fileUrl, state }, session.token); }
+  catch (error) { if (error.status === 401) retry(error); }
+}, 30000);
+window.addEventListener('online', () => { failures = 0; clearTimeout(retryTimer); if (!running) void connectStored(); else void pump(); });
+editor({ type: 'ready' });
+</script></html>

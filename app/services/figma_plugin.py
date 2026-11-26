@@ -7,6 +7,7 @@ import base64
 import gzip
 import hashlib
 import json
+import logging
 import secrets
 import zlib
 from datetime import timedelta, timezone
@@ -17,6 +18,7 @@ from sqlalchemy import select
 from app.models.figma_plugin import FigmaPluginConnection, ProjectFigmaSnapshot
 from app.models.project import Project
 from app.models.project_activity import ProjectActivity
+from app.models.project_sync_run import ProjectSyncRun
 from app.models.user import User
 from app.services.auth_service import hash_token, utc_now
 from app.services.external_sync import resource_id
@@ -28,8 +30,9 @@ MAX_NORMALIZED_BYTES = 48 * 1024 * 1024
 PLAIN_STORAGE_BYTES = 256 * 1024
 STORAGE_ENCODING = 'gzip-json-v1'
 PAIR_LIFETIME = timedelta(minutes=10)
-SESSION_LIFETIME = timedelta(hours=8)
+SESSION_LIFETIME = timedelta(hours=8)  # Absolute session expiry; reconnect with a new code.
 PREFIX = '마지막 전송과 비교한 변경 내용\n'
+logger = logging.getLogger(__name__)
 
 
 def utc(value):
@@ -55,10 +58,14 @@ def same_file(project, row):
 def status(db, project):
     row = connection(db, project.id)
     valid = same_file(project, row) and row.enabled
+    connected = bool(valid and row.token_hash and row.expires_at and row.expires_at > utc_now())
     return {'enabled': bool(valid),
-            'connected': bool(valid and row.token_hash and row.expires_at and row.expires_at > utc_now()),
+            'connected': connected,
             'expires_at': utc(row.expires_at) if valid else None,
-            'last_received_at': utc(row.last_received_at) if valid else None}
+            'last_received_at': utc(row.last_received_at) if valid else None,
+            'last_seen_at': utc(row.last_seen_at) if valid else None,
+            'collection_state': (row.collection_state or 'offline') if connected and row.last_seen_at and
+                                 row.last_seen_at > utc_now() - timedelta(seconds=75) else 'offline'}
 
 
 def locked_project(db, project_id):
@@ -87,7 +94,9 @@ def create_pairing(db, project, user_id):
         row.token_hash = None
         row.expires_at = None
         row.last_sequence = 0
-        row.last_received_at = None
+        # Keep the last successful collection time when replacing credentials.
+        row.last_seen_at = None
+        row.collection_state = 'paused'
         result = {'code': code, 'expires_at': utc(row.pairing_expires_at),
                   'project_name': project.project_name, 'file_url': project.figma_url}
         db.commit()
@@ -116,6 +125,8 @@ def pair(db, code, file_url):
         token = 'moeum_figma_plugin_' + secrets.token_urlsafe(32)
         row.token_hash = hash_token(token)
         row.expires_at = utc_now() + SESSION_LIFETIME
+        row.last_seen_at = utc_now()
+        row.collection_state = 'collecting'
         row.pairing_hash = row.pairing_expires_at = None
         row.last_sequence = 0
         result = {'token': token, 'expires_at': utc(row.expires_at), 'project_id': project.id,
@@ -135,6 +146,7 @@ def disconnect(db, project, user_id):
         row = connection(db, project.id, locked=True)
         if row:
             row.enabled = False
+            row.collection_state = 'paused'
             row.token_hash = row.pairing_hash = None
             row.expires_at = row.pairing_expires_at = None
         db.commit()
@@ -207,7 +219,8 @@ def storage_content(content, serialized):
     return {'encoding': STORAGE_ENCODING, 'data': packed}
 
 
-def receive(db, token, sequence, file_url, name, document):
+def receive(db, token, sequence, file_url, name, document, delta=None, base_revision=None):
+    verified_project_id = None
     try:
         digest = hash_token(token)
         candidate = db.scalar(select(FigmaPluginConnection).where(FigmaPluginConnection.token_hash == digest))
@@ -223,12 +236,21 @@ def receive(db, token, sequence, file_url, name, document):
             raise HTTPException(401, '사용할 수 없는 모음 계정입니다.')
         if resource_id('figma', file_url) != row.resource_id:
             raise HTTPException(409, '이 연결로 다른 Figma 파일의 변경사항을 보낼 수 없습니다.')
+        verified_project_id = project.id
         if sequence <= row.last_sequence:
+            saved = db.get(ProjectFigmaSnapshot, project.id)
+            result = {'created': 0, 'baseline': False, 'duplicate': True,
+                      'received_at': utc(row.last_received_at), 'last_sequence': row.last_sequence,
+                      'revision': saved.revision if saved else 0}
             db.rollback()
-            return {'created': 0, 'baseline': False, 'duplicate': True, 'received_at': utc(row.last_received_at)}
-        content, fingerprint, serialized = normalize_snapshot(name, document)
+            return result
         snapshot = db.scalar(select(ProjectFigmaSnapshot).where(ProjectFigmaSnapshot.project_id == project.id)
                              .with_for_update().execution_options(populate_existing=True))
+        if delta is not None:
+            if snapshot is None or snapshot.resource_id != row.resource_id or snapshot.revision != base_revision:
+                raise HTTPException(409, '비교 기준이 바뀌었습니다. 현재 파일을 다시 비교하세요.')
+            document = apply_delta(previous_content(snapshot.content), delta)
+        content, fingerprint, serialized = normalize_snapshot(name, document)
         baseline = snapshot is None or snapshot.resource_id != row.resource_id
         changed = not baseline and snapshot.fingerprint != fingerprint
         timestamp = utc_now()
@@ -257,10 +279,105 @@ def receive(db, token, sequence, file_url, name, document):
             snapshot.content = storage_content(content, serialized)
         snapshot.received_at = timestamp
         row.last_received_at = timestamp
+        row.last_seen_at = timestamp
+        row.collection_state = 'collecting'
         row.last_sequence = sequence
         db.commit()
         return {'created': int(changed), 'baseline': baseline, 'duplicate': False,
-                'received_at': utc(timestamp)}
+                'received_at': utc(timestamp), 'revision': snapshot.revision, 'last_sequence': sequence}
+    except Exception as error:
+        db.rollback()
+        if verified_project_id is not None:
+            record_failure(db, verified_project_id, digest, error)
+        raise
+
+
+def record_failure(db, project_id, digest, error):
+    """Keep safe diagnostics in existing sync history, without changing the baseline."""
+    code = error.status_code if isinstance(error, HTTPException) else 500
+    reasons = {409: 'Comparison baseline changed; reconcile the current file.',
+               413: 'Snapshot exceeds the storage limit.',
+               422: 'Invalid design data.'}
+    message = 'Figma plugin: ' + reasons.get(code, 'Storage failed; retry the same batch.')
+    try:
+        project = locked_project(db, project_id)
+        row = connection(db, project_id, locked=True)
+        if not same_file(project, row) or not row.enabled or row.token_hash != digest:
+            db.rollback()
+            return
+        timestamp = utc_now()
+        row.last_seen_at = timestamp
+        row.collection_state = 'error'
+        db.add(ProjectSyncRun(project_id=project_id, source='figma', status='failed',
+                              started_at=timestamp, finished_at=timestamp,
+                              fetched=0, created=0, existing=0, error_code=code,
+                              error_message=message))
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning('Unable to record Figma plugin failure for project %s (HTTP %s)', project_id, code)
+
+
+def resume(db, token, file_url, state='collecting'):
+    """Revalidate owner, account, file and revocation on every heartbeat."""
+    try:
+        digest = hash_token(token)
+        candidate = db.scalar(select(FigmaPluginConnection).where(FigmaPluginConnection.token_hash == digest))
+        if candidate is None:
+            raise HTTPException(401, '플러그인을 다시 연결하세요.')
+        project = locked_project(db, candidate.project_id)
+        row = connection(db, project.id, locked=True)
+        if (not same_file(project, row) or not row.enabled or row.token_hash != digest
+                or not row.expires_at or row.expires_at <= utc_now()):
+            raise HTTPException(401, '플러그인 연결이 만료되거나 해제됐습니다.')
+        user = db.get(User, row.user_id)
+        if user is None or user.account_status != 'active':
+            raise HTTPException(401, '사용할 수 없는 계정입니다.')
+        if resource_id('figma', file_url) != row.resource_id:
+            raise HTTPException(409, '연결한 파일과 현재 파일이 다릅니다.')
+        row.last_seen_at = utc_now()
+        row.collection_state = state
+        snapshot = db.get(ProjectFigmaSnapshot, project.id)
+        result = {'project_id': project.id, 'project_name': project.project_name,
+                  'last_sequence': row.last_sequence, 'revision': snapshot.revision if snapshot else 0,
+                  'expires_at': utc(row.expires_at)}
+        db.commit()
+        return result
     except Exception:
         db.rollback()
         raise
+
+
+def apply_delta(previous, delta):
+    """Apply bounded node upserts atomically to the existing comparison baseline."""
+    nodes = {key: dict(value['props'], id=key, children=list(value['children']))
+             for key, value in previous['nodes'].items()}
+    def remove(key):
+        node = nodes.pop(key, None)
+        if node:
+            for child in node['children']:
+                remove(child)
+    try:
+        for key in delta['deleted']:
+            remove(key)
+        for node in delta['upserts']:
+            if not isinstance(node.get('id'), str) or not isinstance(node.get('children', []), list):
+                raise ValueError()
+            nodes[node['id']] = node
+        roots = [key for key, node in nodes.items() if node.get('type') == 'DOCUMENT']
+        if len(roots) != 1 or len(nodes) > 100000:
+            raise ValueError()
+        visited = set()
+        def build(key, depth=0):
+            if depth > 100 or key in visited:
+                raise ValueError()
+            visited.add(key)
+            node = dict(nodes[key])
+            node['children'] = [build(child, depth + 1) for child in node.get('children', [])]
+            return node
+        document = build(roots[0])
+        if len(visited) != len(nodes):
+            raise ValueError()
+        return document
+    except (KeyError, TypeError, ValueError, RecursionError):
+        raise HTTPException(409, '요소 구조를 다시 비교해야 합니다. 전체 보완 수집을 실행하세요.') from None

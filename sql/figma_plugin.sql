@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS figma_plugin_connections (
     expires_at DATETIME NULL,
     last_sequence INT NOT NULL DEFAULT 0,
     last_received_at DATETIME NULL,
+    last_seen_at DATETIME NULL,
+    collection_state VARCHAR(24) NULL,
     CONSTRAINT fk_figma_plugin_project FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
     CONSTRAINT fk_figma_plugin_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
