@@ -9,6 +9,7 @@ class FigmaPluginCORSMiddleware:
                                     allow_methods=['POST'], allow_headers=['Authorization', 'Content-Type'])
 
     async def __call__(self, scope, receive, send):
-        plugin_path = scope.get('path') in ('/api/figma-plugin/pair', '/api/figma-plugin/snapshot')
+        plugin_path = scope.get('path') in ('/api/figma-plugin/pair', '/api/figma-plugin/snapshot',
+                                          '/api/figma-plugin/resume', '/api/figma-plugin/changes')
         target = self.plugin if scope['type'] == 'http' and plugin_path else self.app
         await target(scope, receive, send)

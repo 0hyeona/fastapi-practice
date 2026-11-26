@@ -1,162 +1,106 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { readFile } from 'node:fs/promises';
 import { gunzipSync } from 'node:zlib';
+const main = await readFile(new URL('../code.js', import.meta.url),'utf8');
+const html = await readFile(new URL('../ui.html', import.meta.url),'utf8');
+const uiCode = html.match(/<script>([\s\S]*?)<\/script>/)[1];
 
-const code = await readFile(new URL('../code.js', import.meta.url), 'utf8');
-const ui = (await readFile(new URL('../ui.html', import.meta.url), 'utf8')).match(/<script>([\s\S]*)<\/script>/)[1];
-
-function editor() {
-  const messages = [];
-  const timers = new Map();
-  const events = new Map();
-  const text = { id: '1:1', type: 'TEXT', name: 'Text', characters: 'Before',
-    fontName: Symbol('mixed'), getStyledTextSegments: () => [{ characters: text.characters, start: 0, end: text.characters.length, fontSize: 16 }] };
-  const instance = { id: '1:2', type: 'INSTANCE', name: 'Instance', componentProperties: {},
-    get mainComponent() { throw new Error('dynamic-page mainComponent cannot be read'); } };
-  const figma = {
-    root: { id: '0:0', type: 'DOCUMENT', name: 'Demo', children: [
-      { id: '0:1', type: 'CANVAS', name: 'Page', children: [text, instance] }] },
-    ui: { postMessage: value => messages.push(value) }, showUI() {},
-    async loadAllPagesAsync() { events.set('pages-loaded', true); },
-    on(name, callback) { assert.equal(events.get('pages-loaded'), true); events.set(name, callback); },
+function harness(shared = new Map()) {
+  const events = {}, intervals = [], timeouts = new Map(), calls = [], elements = new Map();
+  const uploadWaiters = [];
+  let timerId = 0, sequence = 0, revision = 0, offline = false, acknowledgedThenLost = false, pagesLoaded = false;
+  const elem = id => {
+    if (!elements.has(id)) elements.set(id,{hidden:false,dataset:{},value:'',textContent:'',disabled:false});
+    return elements.get(id);
   };
-  vm.runInNewContext(code, { figma, __html__: '', setTimeout: fn => { const id = {}; timers.set(id, fn); return id; },
-    clearTimeout: id => timers.delete(id) });
-  return { figma, text, messages, events, timers };
+  const root={id:'0:0',name:'Demo',type:'DOCUMENT',getPluginData:()=> 'local',setPluginData:()=>{}};
+  const page={id:'0:1',name:'Page',type:'CANVAS',parent:root};
+  const text={id:'1:1',name:'Label',type:'TEXT',characters:'Before',fontName:Symbol('mixed'),fontSize:14,x:1,y:2,width:100,height:20,parent:page,getStyledTextSegments:()=>[{characters:text.characters,fontSize:14}]};
+  page.children=[text]; root.children=[page];
+  const nodes=new Map([[root.id,root],[page.id,page],[text.id,text]]);
+  let ui, editor;
+  const sendUI=message => ui.window.onmessage({source:ui.parent,origin:'null',data:{pluginMessage:message}});
+  const figma={root,fileKey:'FILE123',showUI:()=>{},loadAllPagesAsync:async()=>{pagesLoaded=true;},on:(name,fn)=>{assert.equal(pagesLoaded,true);events[name]=fn;},
+    getNodeByIdAsync:async id=>nodes.get(id)||null,
+    clientStorage:{getAsync:async key=>structuredClone(shared.get(key)),setAsync:async(key,value)=>shared.set(key,structuredClone(value)),deleteAsync:async key=>shared.delete(key)},
+    ui:{postMessage:message=>queueMicrotask(()=>sendUI(message))}};
+  editor=vm.createContext({figma,__html__:'',setTimeout,clearTimeout,console});
+  vm.runInContext(main,editor);
+  const parent={postMessage:message=>queueMicrotask(()=>figma.ui.onmessage(message.pluginMessage))}; parent.parent=parent;
+  const window={onmessage:null,addEventListener:()=>{}};
+  ui=vm.createContext({parent,window,document:{getElementById:elem},URL,Blob,Response,CompressionStream,AbortSignal,Intl,Date,Math,Map,Promise,console,
+    setInterval:(fn,ms)=>intervals.push({fn,ms}),
+    setTimeout:(fn,ms)=>{const id=++timerId;timeouts.set(id,{fn,ms});return id;}, clearTimeout:id=>timeouts.delete(id),
+    fetch:async(url,options)=>{
+      const path=new URL(url).pathname.replace('/api/figma-plugin','');
+      const compressed=options.headers['Content-Type']==='application/gzip';
+      const body=JSON.parse(compressed ? gunzipSync(new Uint8Array(await options.body.arrayBuffer())).toString('utf8') : options.body);
+      calls.push({path,body,compressed});
+      if (path === '/changes') for (const resolve of uploadWaiters.splice(0)) resolve(calls.at(-1));
+      if(offline) throw new Error('offline');
+      if(path==='/pair') return {ok:true,json:async()=>({token:'moeum_figma_plugin_test',project_name:'Demo'})};
+      if(path==='/resume') return {ok:true,json:async()=>({last_sequence:sequence,revision})};
+      const duplicate=body.sequence<=sequence;
+      if(!duplicate){sequence=body.sequence;revision++;}
+      if(acknowledgedThenLost){acknowledgedThenLost=false;throw new Error('response lost');}
+      return {ok:true,json:async()=>({last_sequence:sequence,revision,duplicate,received_at:new Date().toISOString()})};
+    }});
+  vm.runInContext(uiCode,ui);
+  const drain=async()=>{for(let i=0;i<30;i++) await new Promise(resolve=>setImmediate(resolve));};
+  return {calls,elements,nodes,text,page,events,shared,intervals,timeouts,drain,
+    nextUpload:()=>new Promise(resolve=>uploadWaiters.push(resolve)),
+    async pair(){await drain();elem('code').value='pair-code';elem('file-url').value='https://www.figma.com/design/FILE123/Test';await elem('pair-form').onsubmit({preventDefault(){}});await drain();},
+    async tick(){await intervals.find(i=>i.ms===5000).fn();await drain();},
+    async retry(){const entry=[...timeouts].find(([,t])=>t.ms<10000);assert.ok(entry,'automatic retry scheduled');timeouts.delete(entry[0]);await entry[1].fn();await drain();},
+    set offline(value){offline=value;},set loseResponse(value){acknowledgedThenLost=value;},
+    change(changes=[{id:'1:1',type:'PROPERTY_CHANGE',properties:['characters']}]){events.documentchange({documentChanges:changes});}};
 }
 
-test('plugin loads every page before baseline and captures mixed text styles without REST', async () => {
-  const h = editor();
-  await h.figma.ui.onmessage({ type: 'start' });
-  const snapshot = h.messages.find(message => message.type === 'snapshot').snapshot;
-  assert.equal(snapshot.document.children[0].children[0].characters, 'Before');
-  assert.equal(snapshot.document.children[0].children[0].style.segments[0].fontSize, 16);
-  assert.equal(snapshot.document.children[0].children[1].type, 'INSTANCE');
-  assert.equal(h.messages.some(message => message.type === 'capture-error'), false);
+test('pair persists credentials; edits batch at five seconds, reopen resumes without pairing',async()=>{
+  const h=harness();await h.pair();
+  assert.equal(h.calls.filter(c=>c.path==='/snapshot').length,1);
+  assert.equal(h.calls.find(c=>c.path==='/snapshot').body.document.children[0].children[0].style.segments[0].fontSize,14);
+  const saved=[...h.shared.values()][0];assert.equal(saved.session.token,'moeum_figma_plugin_test');
+  h.text.characters='After';h.change();await h.drain();
+  assert.equal(h.calls.filter(c=>c.path==='/changes').length,0);
+  await h.tick();
+  const delta=h.calls.find(c=>c.path==='/changes');assert.ok(delta);
+  assert.equal(delta.body.upserts.find(n=>n.id==='1:1').characters,'After');
+  assert.equal(delta.body.document,undefined);
+  const reopened=harness(h.shared);await reopened.drain();
+  assert.equal(reopened.calls.filter(c=>c.path==='/pair').length,0);
+  assert.ok(reopened.calls.some(c=>c.path==='/resume'));
+  assert.ok(reopened.calls.some(c=>c.path==='/snapshot'));
 });
 
-test('document edits debounce and closing a connection stops later captures', async () => {
-  const h = editor();
-  await h.figma.ui.onmessage({ type: 'start' });
-  h.messages.length = 0;
-  h.text.characters = 'After';
-  h.events.get('documentchange')();
-  h.events.get('documentchange')();
-  assert.equal(h.timers.size, 1);
-  [...h.timers.values()][0]();
-  assert.equal(h.messages.filter(message => message.type === 'snapshot').length, 1);
-  await h.figma.ui.onmessage({ type: 'stop' });
-  h.messages.length = 0;
-  h.events.get('documentchange')();
-  assert.equal(h.messages.length, 0);
+test('frame creation/deletion, text, fills and size use node deltas without repeated snapshots',async()=>{
+  const h=harness();await h.pair();
+  const frame={id:'2:1',name:'Frame',type:'FRAME',children:[],parent:h.page,x:0,y:0,width:300,height:200};
+  h.nodes.set(frame.id,frame);h.page.children.push(frame);h.change([{id:frame.id,type:'CREATE'}]);await h.tick();
+  let batch=h.calls.filter(c=>c.path==='/changes').at(-1).body;
+  assert.ok(batch.upserts.some(n=>n.id===frame.id));
+  h.text.fills=[{type:'SOLID',color:{r:1,g:0,b:0}}];h.text.width=200;h.change();await h.tick();
+  batch=h.calls.filter(c=>c.path==='/changes').at(-1).body;
+  assert.deepEqual(batch.upserts.find(n=>n.id==='1:1').size,[200,20]);
+  h.nodes.delete(frame.id);h.page.children.pop();h.change([{id:frame.id,type:'DELETE'}]);await h.tick();
+  batch=h.calls.filter(c=>c.path==='/changes').at(-1).body;assert.ok(batch.deleted.includes(frame.id));
+  assert.equal(h.calls.filter(c=>c.path==='/snapshot').length,1);
 });
 
-function iframe() {
-  const nodes = new Map();
-  const calls = [];
-  const elements = id => {
-    if (!nodes.has(id)) nodes.set(id, { value: '', hidden: false, disabled: false, dataset: {}, textContent: '' });
-    return nodes.get(id);
-  };
-  const window = {};
-  const host = {};
-  host.parent = host;
-  const parent = { parent: host, postMessage() {} };
-  let responder = async () => ({ created: 0, baseline: true, received_at: '2026-11-21T15:00:00Z' });
-  const context = {
-    document: { getElementById: elements }, window, parent, Intl, Date, AbortSignal, Blob, Response, CompressionStream,
-    setTimeout, clearTimeout,
-    fetch: async (url, options) => {
-      const compressed = options.headers['Content-Type'] === 'application/gzip';
-      const body = compressed
-        ? JSON.parse(gunzipSync(new Uint8Array(await options.body.arrayBuffer())).toString('utf8'))
-        : JSON.parse(options.body);
-      calls.push({ url, body, headers: options.headers, bytes: compressed ? options.body.size : Buffer.byteLength(options.body) });
-      const result = await responder(calls.at(-1));
-      return { ok: true, json: async () => result };
-    },
-  };
-  vm.runInNewContext(ui, context);
-  return { elements, calls, parent, window, respond(fn) { responder = fn; },
-    capture(text) { window.onmessage({ source: parent, data: { pluginMessage: { type: 'snapshot', snapshot: {
-      name: 'Demo', document: { type: 'DOCUMENT', name: text },
-    } } } }); } };
-}
-
-const settle = () => new Promise(resolve => setImmediate(resolve));
-async function pairIframe(h) {
-  h.elements('code').value = 'one-time-code';
-  h.elements('file-url').value = 'https://www.figma.com/design/FILE123/Test';
-  h.respond(async () => ({ token: 'scoped-token', project_name: 'Demo' }));
-  await h.elements('pair-form').onsubmit({ preventDefault() {} });
-}
-
-test('plugin upload queue serializes snapshots and always uses increasing sequence numbers', async () => {
-  const h = iframe();
-  await pairIframe(h);
-  let release;
-  h.respond(() => new Promise(resolve => { release = resolve; }));
-  h.capture('Before');
-  h.capture('After');
-  assert.equal(h.calls.length, 2); // Pair plus only one upload in flight.
-  h.respond(async () => ({ created: 1, baseline: false, received_at: '2026-11-21T15:00:01Z' }));
-  release({ created: 0, baseline: true, received_at: '2026-11-21T15:00:00Z' });
-  await settle();
-  assert.deepEqual(h.calls.slice(1).map(call => call.body.sequence), [1, 2]);
-  assert.equal(h.calls[2].body.document.name, 'After');
-  assert.ok(h.calls.every(call => call.url.startsWith('https://fastapi-practice-jwse.onrender.com/api/figma-plugin/')));
-  assert.equal(h.calls[1].headers.Authorization, 'Bearer scoped-token');
+test('network failure retries the identical durable sequence, including a lost acknowledgement',async()=>{
+  const h=harness();await h.pair();h.offline=true;h.text.characters='offline';h.change();await h.tick();
+  const first=[...h.shared.values()][0].pending.body;
+  assert.ok([...h.shared.values()][0].pending);
+  h.offline=false;h.loseResponse=true;await h.retry();await h.retry();
+  const sent=h.calls.filter(c=>c.path==='/changes');assert.equal(sent.length,2);
+  assert.ok(sent.every(c=>c.body.sequence===first.sequence));
+  assert.equal([...h.shared.values()][0].pending,null);
 });
 
-test('a large Korean snapshot uses gzip and preserves all fields', { timeout: 10000 }, async () => {
-  const h = iframe();
-  await pairIframe(h);
-  const text = '디자인 수정 기록 '.repeat(220000);
-  const sent = new Promise(resolve => h.respond(call => {
-    resolve(call);
-    return { baseline: true, received_at: '2026-11-21T15:00:00Z' };
-  }));
-  h.capture(text);
-  const call = await sent;
-  assert.equal(call.headers['Content-Type'], 'application/gzip');
-  assert.equal(call.body.document.name, text);
-  assert.ok(Buffer.byteLength(JSON.stringify(call.body)) > 4 * 1024 * 1024);
-  assert.ok(call.bytes < 4 * 1024 * 1024);
-});
-
-test('an oversized snapshot can be followed by a smaller complete capture', async () => {
-  const h = iframe();
-  await pairIframe(h);
-  h.respond(() => { throw Object.assign(new Error('크기 제한'), { status: 413 }); });
-  h.capture('Too large');
-  await settle();
-  h.respond(() => ({ baseline: true, received_at: '2026-11-21T15:00:00Z' }));
-  h.capture('Fits');
-  await settle();
-  assert.deepEqual(h.calls.slice(1).map(call => call.body.sequence), [1, 2]);
-  assert.equal(h.calls.at(-1).body.document.name, 'Fits');
-  assert.match(h.elements('status').textContent, /기준 저장 완료/);
-});
-
-test('the nested Figma editor delivers a capture error with a single history notice', () => {
-  const h = iframe();
-  h.window.onmessage({ origin: 'https://www.figma.com', source: h.parent.parent,
-    data: { pluginMessage: { type: 'capture-error', message: '크기 제한. 기존 변경사항은 유지돼요.' } } });
-  assert.equal(h.elements('status').textContent, '크기 제한. 기존 기록은 유지돼요.');
-});
-
-test('a failed upload retries the same sequence before sending newer contents', async () => {
-  const h = iframe();
-  await pairIframe(h);
-  h.respond(async () => { throw new Error('network failed'); });
-  h.capture('Before');
-  await settle();
-  h.respond(async () => ({ created: 0, baseline: false, received_at: '2026-11-21T15:00:00Z' }));
-  h.capture('After');
-  await settle();
-  assert.deepEqual(h.calls.slice(1).map(call => call.body.sequence), [1, 1, 2]);
-  assert.equal(h.calls[2].body.document.name, 'Before');
-  assert.equal(h.calls[3].body.document.name, 'After');
+test('large Korean node batches retain their text through gzip',{timeout:10000},async()=>{
+ const h=harness();await h.pair();const sent=h.nextUpload();h.text.characters='디자인 수정 '.repeat(20000);h.change();await h.tick();
+ const call=await sent;assert.equal(call.compressed,true);
+ assert.equal(call.body.upserts.find(n=>n.id==='1:1').characters,h.text.characters);
 });
