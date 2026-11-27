@@ -1,5 +1,6 @@
 """인증 API 주소와 HTTP 응답을 정의합니다."""
 
+import logging
 import os
 import secrets
 from urllib.parse import urlencode, urlsplit
@@ -13,7 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from app.database.database import get_db
 from app.schemas.auth import GithubExchangeRequest, LoginRequest, LoginResponse, SignupRequest, SignupResponse
 from app.services.auth_service import (
-    DuplicateUserError, InvalidCredentialsError, authenticated_session, login, logout, signup,
+    DuplicateUserError, InvalidCredentialsError, authenticated_session, login, logout, renew_login_session, signup,
 )
 from app.services.github_oauth import fetch_github_user
 from app.services.github_login import github_login_session
@@ -21,6 +22,15 @@ from app.services.oauth_handoff import create_handoff, exchange_handoff
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 bearer = HTTPBearer(auto_error=False)
+logger = logging.getLogger("uvicorn.error")
+SESSION_COOKIE = "moeum_session"
+
+
+def persist_login(response: Response, session: LoginResponse, request: Request) -> LoginResponse:
+    response.set_cookie(SESSION_COOKIE, session.access_token, max_age=session.expires_in,
+                        httponly=True, secure=request.url.scheme == "https", samesite="lax", path="/")
+    response.headers["Cache-Control"] = "no-store"
+    return session
 
 
 def frontend_callback_url() -> str:
@@ -108,10 +118,11 @@ async def github_callback(request: Request, code: str | None = None,
 
 
 @router.post("/github/exchange", response_model=LoginResponse)
-def github_exchange(request: GithubExchangeRequest, response: Response, db: Session = Depends(get_db)):
+def github_exchange(request: GithubExchangeRequest, response: Response, http_request: Request,
+                    db: Session = Depends(get_db)):
     response.headers["Cache-Control"] = "no-store"
     try:
-        return exchange_handoff(db, request.code)
+        return persist_login(response, exchange_handoff(db, request.code), http_request)
     except InvalidCredentialsError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=401, headers={"Cache-Control": "no-store"})
     except SQLAlchemyError:
@@ -120,24 +131,52 @@ def github_exchange(request: GithubExchangeRequest, response: Response, db: Sess
                             status_code=503, headers={"Cache-Control": "no-store"})
 
 
-def unauthorized(detail: str) -> HTTPException:
-    return HTTPException(status_code=401, detail=detail, headers={"WWW-Authenticate": "Bearer"})
+def unauthorized(detail: str, reason: str = "INVALID_CREDENTIALS") -> HTTPException:
+    return HTTPException(status_code=401, detail=detail,
+                         headers={"WWW-Authenticate": "Bearer", "X-Auth-Error": reason})
 
 
-def get_login_session(credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+def rejected_session(request: Request, error: InvalidCredentialsError) -> HTTPException:
+    # Do not log headers, token hashes, query strings, or exception payloads.
+    logger.warning("auth_rejected reason=%s user_id=%s request_id=%s method=%s path=%s",
+                   error.reason, error.user_id, getattr(request.state, "request_id", "unknown"),
+                   request.method, request.url.path)
+    return unauthorized(str(error), error.reason)
+
+
+def get_login_session(request: Request, credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
                       db: Session = Depends(get_db)):
-    if credentials is None:
-        raise unauthorized("로그인이 필요합니다.")
     try:
+        if credentials is None:
+            raise InvalidCredentialsError("로그인이 필요합니다.", reason="AUTH_REQUIRED")
         return authenticated_session(db, credentials.credentials)
     except InvalidCredentialsError as exc:
-        raise unauthorized(str(exc)) from exc
+        raise rejected_session(request, exc) from exc
+
+
+@router.post("/refresh", response_model=LoginResponse)
+def refresh_login(request: Request, response: Response,
+                  credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
+                  db: Session = Depends(get_db)):
+    origin = request.headers.get("origin")
+    allowed = {value.strip() for value in os.getenv(
+        "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if value.strip()}
+    # Cookies are used only for first-party session restoration, never for provider APIs.
+    if (origin and origin not in allowed) or (not origin and credentials is None):
+        raise HTTPException(403, "로그인 유지 요청의 출처를 확인할 수 없습니다.")
+    token = credentials.credentials if credentials else request.cookies.get(SESSION_COOKIE)
+    try:
+        if not token:
+            raise InvalidCredentialsError("로그인이 필요합니다.", reason="AUTH_REQUIRED")
+        return persist_login(response, renew_login_session(db, token), request)
+    except InvalidCredentialsError as exc:
+        raise rejected_session(request, exc) from exc
 
 
 @router.post("/login", response_model=LoginResponse)
-def login_user(request: LoginRequest, db: Session = Depends(get_db)):
+def login_user(request: LoginRequest, response: Response, http_request: Request, db: Session = Depends(get_db)):
     try:
-        return login(db, request)
+        return persist_login(response, login(db, request), http_request)
     except InvalidCredentialsError as exc:
         raise unauthorized(str(exc)) from exc
 
@@ -148,8 +187,10 @@ def current_user(login_session=Depends(get_login_session)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout_user(login_session=Depends(get_login_session), db: Session = Depends(get_db)):
+def logout_user(response: Response, login_session=Depends(get_login_session), db: Session = Depends(get_db)):
     logout(db, login_session[0])
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    response.headers["Cache-Control"] = "no-store"
 
 
 @router.post("/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED)

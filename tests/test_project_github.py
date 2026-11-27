@@ -86,6 +86,15 @@ class GitHubClientTests(unittest.TestCase):
         github_rate_limit._cooldowns.clear()
         github_cache._entries.clear()
 
+    def test_provider_expiry_is_not_a_moeum_session_401(self):
+        client = GitHubClient('acme/demo', 1)
+        client.personal = True
+        with patch('httpx.Client.get', return_value=httpx.Response(401)):
+            with self.assertRaises(HTTPException) as raised:
+                client.get()
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertEqual(raised.exception.headers['X-Integration-Error'], 'GITHUB_RECONNECT_REQUIRED')
+
     def test_repository_validation(self):
         self.assertEqual(repository_name("https://github.com/acme/demo.git"), "acme/demo")
         for url in ("https://github.com.evil/a/b", "http://github.com/a/b", "https://github.com/a/b/tree/main",

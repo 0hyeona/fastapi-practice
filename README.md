@@ -58,7 +58,7 @@ API 서버에는 FastAPI 0.142.2, Uvicorn 0.54.0, Pydantic 2.13.5를 사용합�
 
 | 기능 | 대표 요청 | 서버에서 처리하는 내용 |
 | --- | --- | --- |
-| 회원 인증 | `POST /api/auth/login` · `GET /api/auth/me` | 이메일 또는 GitHub로 로그인한 회원에게 1시간 동안 유효한 Bearer 세션을 발급합니다. 비밀번호 재설정 인증번호는 Gmail API로 발송합니다. |
+| 회원 인증 | `POST /api/auth/login` · `POST /api/auth/refresh` · `GET /api/auth/me` | 이메일·GitHub 로그인 후 마지막 갱신부터 30일간 유지하며, 접속 중 자동 갱신하고 브라우저 재실행 시 쿠키로 복원합니다. [로그인 유지 정책](./docs/session-expiration.md)을 참고하세요. 비밀번호 재설정 인증번호는 Gmail API로 발송합니다. |
 | 프로젝트 | `POST /projects` · `GET /projects` | 내가 소유하거나 공유받은 프로젝트를 조회합니다. 소유자는 프로젝트를 수정·보관·복원·삭제할 수 있습니다. [프로젝트 API](./docs/project-api.md) |
 | 멤버 공유 | `POST /api/projects/{project_id}/members` | 소유자가 가입 이메일로 팀원을 추가합니다. 팀원은 기록과 Story를 조회하고 소유자의 연결로 Notion을 다시 수집할 수 있습니다. [멤버 권한표](./docs/project-sharing.md#api와-권한) |
 | 대시보드와 변경사항 | `GET /api/projects/{project_id}/dashboard` · `GET /api/projects/{project_id}/activities` | 서비스별 미정리 개수와 최근 활동을 조회합니다. 활동 목록에 `unorganized=true`를 주면 Story에 연결할 기록만 가져옵니다. |

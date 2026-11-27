@@ -48,6 +48,7 @@ class PasswordResetTests(unittest.TestCase):
         token = response.json()["reset_token"]
         self.assertEqual(self.verify(code).status_code, 400)
         self.assertEqual(self.client.post("/api/auth/password/reset", json=self.reset_payload(token)).status_code, 200)
+        self.assertEqual(self.client.post('/api/auth/refresh', headers={'Authorization': 'Bearer ' + access}).status_code, 401)
         self.assertEqual(self.client.post("/api/auth/password/reset", json=self.reset_payload(token)).status_code, 400)
         self.assertEqual(self.client.post("/api/auth/login", json=credentials).status_code, 401)
         self.assertEqual(self.client.post("/api/auth/login", json={**credentials, "password": "New-pass123!"}).status_code, 200)

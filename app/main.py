@@ -1,8 +1,9 @@
 from app.routers import project_sync_runs, project_members
 from app.routers import project_github, project_integrations, project_connections, notion_oauth, figma_oauth, figma_plugin
 import os
+from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.figma_plugin_cors import FigmaPluginCORSMiddleware
 
@@ -16,7 +17,8 @@ app.add_middleware(
     ).split(",") if origin.strip()],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
-    expose_headers=["Content-Disposition", "Retry-After", "X-RateLimit-Reset"],
+    expose_headers=["Content-Disposition", "Retry-After", "X-RateLimit-Reset",
+                    "X-Auth-Error", "X-Integration-Error", "X-Request-ID"],
 )
 app.add_middleware(FigmaPluginCORSMiddleware)
 app.include_router(projects.router)
@@ -32,6 +34,16 @@ app.include_router(stories.router)
 app.include_router(project_activities.router)
 app.include_router(auth.router)
 app.include_router(password_reset.router)
+
+
+@app.middleware("http")
+async def identify_request(request: Request, call_next):
+    request.state.request_id = uuid4().hex
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request.state.request_id
+    if request.url.path.startswith('/api/auth/'):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.get("/")

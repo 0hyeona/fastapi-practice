@@ -99,7 +99,8 @@ class GithubOAuthTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["user"]["name"], "Test")
         self.assertEqual(response.json()["user"]["email"], "octocat@example.com")
-        self.assertEqual(response.json()["expires_in"], 3600)
+        self.assertEqual(response.json()["expires_in"], 30 * 24 * 60 * 60)
+        self.assertIn('HttpOnly', response.headers['set-cookie'])
         self.assertEqual(response.json()["token_type"], "bearer")
         token = response.json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}

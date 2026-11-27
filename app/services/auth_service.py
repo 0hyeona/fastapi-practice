@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
-from sqlalchemy import select
+from sqlalchemy import case, select, update
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -15,12 +15,17 @@ from app.models.auth_session import AuthSession
 from app.schemas.auth import LoginRequest, LoginResponse, SignupRequest, SignupResponse
 
 password_hasher = PasswordHash.recommended()
-SESSION_SECONDS = 3600
+SESSION_SECONDS = 30 * 24 * 60 * 60
 DUMMY_PASSWORD_HASH = password_hasher.hash(secrets.token_urlsafe(32))
 
 
 class InvalidCredentialsError(Exception):
     """이메일, 비밀번호 또는 계정 상태가 유효하지 않습니다."""
+
+    def __init__(self, message: str, *, reason: str = "INVALID_CREDENTIALS", user_id: int | None = None):
+        super().__init__(message)
+        self.reason = reason
+        self.user_id = user_id
 
 
 def utc_now() -> datetime:
@@ -66,12 +71,39 @@ def create_login_session(db: Session, user: User) -> LoginResponse:
 
 def authenticated_session(db: Session, token: str) -> tuple[AuthSession, User]:
     row = db.execute(select(AuthSession, User).join(User, AuthSession.user_id == User.id).where(
-        AuthSession.token_hash == hash_token(token), AuthSession.expires_at > utc_now(),
-        User.account_status == "active",
+        AuthSession.token_hash == hash_token(token),
     )).first()
+    message = "유효하지 않거나 만료된 로그인입니다."
     if row is None:
-        raise InvalidCredentialsError("유효하지 않거나 만료된 로그인입니다.")
+        raise InvalidCredentialsError(message, reason="SESSION_NOT_FOUND")
+    session, user = row
+    if user.account_status != "active":
+        raise InvalidCredentialsError(message, reason="ACCOUNT_INACTIVE", user_id=user.id)
+    if session.expires_at <= utc_now():
+        raise InvalidCredentialsError(message, reason="SESSION_EXPIRED", user_id=user.id)
     return row[0], row[1]
+
+
+def renew_login_session(db: Session, token: str) -> LoginResponse:
+    """Extend an existing session; never recreate a revoked or expired session."""
+    session, user = authenticated_session(db, token)
+    now = utc_now()
+    deadline = now + timedelta(seconds=SESSION_SECONDS)
+    try:
+        result = db.execute(update(AuthSession).where(
+            AuthSession.id == session.id, AuthSession.token_hash == hash_token(token),
+            AuthSession.expires_at > now,
+            AuthSession.user_id.in_(select(User.id).where(User.account_status == "active")),
+        ).values(expires_at=case((AuthSession.expires_at < deadline, deadline), else_=AuthSession.expires_at)))
+        if result.rowcount != 1:
+            raise InvalidCredentialsError("유효하지 않거나 만료된 로그인입니다.",
+                                          reason="SESSION_NOT_FOUND", user_id=user.id)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return LoginResponse(access_token=token, expires_in=SESSION_SECONDS,
+                         user=SignupResponse.model_validate(user))
 
 
 def logout(db: Session, session: AuthSession) -> None:

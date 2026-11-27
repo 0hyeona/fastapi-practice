@@ -20,7 +20,8 @@ class ConnectionsTests(unittest.TestCase):
     def test_registered_url_is_not_verified_access(self):
         self.project.figma_url='https://www.figma.com/design/ABC/Test'
         self.db.commit()
-        with patch.dict(os.environ, {'FIGMA_TOKEN':'','GITHUB_TOKEN':''}):
+        with patch.dict(os.environ, {'FIGMA_TOKEN':'','GITHUB_TOKEN':'',
+                                    'GITHUB_CLIENT_ID':'','GITHUB_CLIENT_SECRET':''}):
             result=routes.Connections.model_validate(routes.connections(self.project,self.db))
         self.assertEqual([c.source for c in result.connections],['github','notion','figma'])
         self.assertEqual(result.connections[0].connection_status,'public_access_unverified')
@@ -44,9 +45,13 @@ class ConnectionsTests(unittest.TestCase):
             routes.ConnectionUpdate()
 
     def test_counts_and_source_filters_are_project_scoped(self):
+        page_url = 'https://www.notion.so/' + 'a' * 32
+        self.project.notion_url = page_url
+        self.db.commit()
         for source in ('github','notion','figma'):
             content.create(self.db,ProjectActivity,ProjectActivityCreate(project_id=self.project.id,source=source,
-                activity_type='edit',title=source,occurred_at='2026-11-01T00:00:00Z'),self.project.owner_id)
+                activity_type='edit',title=source,occurred_at='2026-11-01T00:00:00Z',
+                source_url=page_url if source == 'notion' else None),self.project.owner_id)
         content.create(self.db,ProjectActivity,ProjectActivityCreate(project_id=self.other.id,source='figma',
             activity_type='edit',title='other',occurred_at='2026-11-01T00:00:00Z'),self.other.owner_id)
         for source in ('github','notion','figma'):
